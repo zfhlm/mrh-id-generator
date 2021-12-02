@@ -70,6 +70,57 @@
 
        4，降低计数序列号为 10 bit，即支持最大每秒 102.4 万个 ID 生成
 
+    基于 springboot 代码使用示例：
+
+        // 创建生成器配置
+        @Bean
+        public RevisionProperties revisionProperties() {
+            RevisionProperties properties = RevisionProperties.buildDefault();
+            properties.setInterval(Duration.ofSeconds(30L));
+            properties.setTimeToLive(Duration.ofMinutes(10));
+            properties.setThreshold(80);
+            return properties;
+        }
+
+        // 创建生成器存储中间件接口
+        @Bean
+        public RevisionRepository revisionRepository(DataSource dataSource) {
+            return new RevisionMysqlJdbcRepository("mytest", dataSource);
+        }
+
+        // 创建ID生成器
+        @Bean
+        public RevisionIdGenerator revisionIdGenerator(RevisionRepository repository, RevisionProperties properties) {
+            return new AutoDelayRevisionIdGeneratorFactory(repository).create(properties);
+        }
+
+        // 注入ID生成器
+        @Autowired
+        private RevisionIdGenerator revisionIdGenerator;
+
+        // 生成全局唯一 ID
+        long id = idGenerator.generate();
+
+    生成器配置：
+
+        epochDate              系统上线时间，一旦指定不可变动
+
+        timeToLive             初始化或延时时长，如果配置过长，应用重启、时钟回拨超过三次都会导致占用 workerId 一段可用时间，可能导致耗尽，建议10分钟
+
+        threshold              延时阈值，范围(0,100)，需要根据 timeToLive 进行定义，在超时之前留有足够的时候去执行延时逻辑
+
+        interval               延时检测时间间隔
+
+    生成器逻辑：
+
+        首先获取一个可用的 workerId 及其 可用时间范围，实例化生成器
+
+        异步调度任务，对当前的 ID 生成器 可用时间范围 进行检测，到达阈值延长 workerId 可用时间范围
+
+        调用方法生成 ID，如果 ID 等于 -1，表示生成器已经失效，可能原因：延时失败、时钟回拨超过三次
+
+        当前 ID 生成器失效，触发同步获取另一个可用的 workId 及其 可用时间范围，实例化作为当前 ID 生成器
+
 ## segment
 
     号段 ID 生成器，基于 springboot 使用示例：
