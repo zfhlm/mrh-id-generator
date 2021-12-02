@@ -66,7 +66,7 @@
 
        2，支持 2^10 = 1024 个 workerId
 
-       3，支持自动处理 2^2 - 1 = 3 次时钟回拨（减初始 00 bits）
+       3，支持自动处理 2^2 - 1 = 3 次时钟回拨（减初始 00 bits，可用 01、10、11 bits）
 
        4，降低计数序列号为 10 bit，即支持最大每秒 102.4 万个 ID 生成
 
@@ -121,16 +121,6 @@
 
         当前 ID 生成器失效，触发同步获取另一个可用的 workId 及其 可用时间范围，实例化作为当前 ID 生成器
 
-    天然限制：
-
-        工作节点 ID 数量只有 1024 个，如果频繁重启、时钟回拨超过三次，都会占用 工作节点 可用时间范围，导致耗尽问题
-
-        建议给不同的子服务设置不同的 业务命名空间，分别进行 workerId 分配，互不影响
-
-        如果节点过多、节点重启频繁，建议部署为单独服务，每个服务配置多个 ID 生成器进行轮询和失败重试，多个服务进行负载均衡实现高可用
-
-        例如 部署三个服务，每个服务使用 10 个 workerId，总占用数量总共 30 个
-
     存储接口实现：
 
         org.lushen.mrh.id.generator.revision.achieve.RevisionMemoryRepository         基于内存存储(仅测试使用)
@@ -155,6 +145,24 @@
     存储接口扩展：
 
         org.lushen.mrh.id.generator.revision.RevisionRepository                      根据接口描述，实现此接口
+
+        实现类最好能提供 号段命名空间 规则，对不同子服务的 workerId 进行划分，使每个子服务都有自己的 1024 个 workerId，互不影响
+
+    业务命名空间，例如有两个业务不同的服务 service-A、service-B，创建存储接口：
+
+        // 各自拥有 1024 个 workerId
+
+        // service-A
+        @Bean
+        public RevisionRepository revisionRepository(DataSource dataSource) {
+            return new RevisionMysqlJdbcRepository("service-A", dataSource);
+        }
+
+        // service-B
+        @Bean
+        public RevisionRepository revisionRepository(DataSource dataSource) {
+            return new RevisionMysqlJdbcRepository("service-B", dataSource);
+        }
 
 ## segment
 
