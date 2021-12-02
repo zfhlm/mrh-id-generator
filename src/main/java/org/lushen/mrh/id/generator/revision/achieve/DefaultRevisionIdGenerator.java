@@ -49,6 +49,8 @@ public class DefaultRevisionIdGenerator implements RevisionIdGenerator {
 	private long beginAt;				// 可用开始时间戳
 
 	private long expiredAt;				// 可用过期时间戳
+	
+	private long delayAt;				// 可用延时时间戳
 
 	/**
 	 * revision ID 生成器
@@ -81,9 +83,21 @@ public class DefaultRevisionIdGenerator implements RevisionIdGenerator {
 
 		long timestamp = timeGen();
 
-		// 不在可用时段内，返回 -1 由外部自行处理
-		if(timestamp < beginAt || timestamp > expiredAt) {
+		// 比开始时间小，返回 -1 由外部自行处理
+		if(timestamp < beginAt) {
 			return -1L;
+		}
+		
+		// 比开始时间大，尝试切换到延时时间，并重置时钟回拨次数
+		if(timestamp > expiredAt) {
+			if(delayAt > expiredAt) {
+				beginAt = expiredAt;
+				expiredAt = delayAt;
+				delayAt = 0L;
+				moveBack = 0;
+			} else {
+				return -1L;
+			}
 		}
 
 		// 发生时钟回拨，滚动次数加 1，如果达到最大次数，返回 -1 由外部自行处理
@@ -148,7 +162,11 @@ public class DefaultRevisionIdGenerator implements RevisionIdGenerator {
 	 * @return
 	 */
 	public long getExpiredAt() {
-		return this.expiredAt;
+		if(this.delayAt > this.expiredAt) {
+			return this.delayAt;
+		} else {
+			return this.expiredAt;
+		}
 	}
 
 	/**
@@ -157,8 +175,8 @@ public class DefaultRevisionIdGenerator implements RevisionIdGenerator {
 	 * @param expiredAt
 	 */
 	public void delay(long expiredAt) {
-		if(this.expiredAt < expiredAt) {
-			this.expiredAt = expiredAt;
+		if(this.expiredAt < expiredAt && this.delayAt < expiredAt) {
+			this.delayAt = expiredAt;
 		}
 	}
 

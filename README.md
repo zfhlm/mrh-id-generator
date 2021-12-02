@@ -82,7 +82,7 @@
             return properties;
         }
 
-        // 创建生成器存储中间件接口
+        // 创建生成器存储中间件接口，指定业务命名空间为 mytest
         @Bean
         public RevisionRepository revisionRepository(DataSource dataSource) {
             return new RevisionMysqlJdbcRepository("mytest", dataSource);
@@ -105,7 +105,7 @@
 
         epochDate              系统上线时间，一旦指定不可变动
 
-        timeToLive             初始化或延时时长，如果配置过长，应用重启、时钟回拨超过三次都会导致占用 workerId 一段可用时间，可能导致耗尽，建议10分钟
+        timeToLive             初始化或延时时长，如果配置过长，应用重启、时钟回拨超过三次都会导致占用 workerId 一段可用时间，可能导致耗尽
 
         threshold              延时阈值，范围(0,100)，需要根据 timeToLive 进行定义，在超时之前留有足够的时候去执行延时逻辑
 
@@ -120,6 +120,41 @@
         调用方法生成 ID，如果 ID 等于 -1，表示生成器已经失效，可能原因：延时失败、时钟回拨超过三次
 
         当前 ID 生成器失效，触发同步获取另一个可用的 workId 及其 可用时间范围，实例化作为当前 ID 生成器
+
+    天然限制：
+
+        工作节点 ID 数量只有 1024 个，如果频繁重启、时钟回拨超过三次，都会占用 工作节点 可用时间范围，导致耗尽问题
+
+        建议给不同的子服务设置不同的 业务命名空间，分别进行 workerId 分配，互不影响
+
+        如果节点过多、节点重启频繁，建议部署为单独服务，每个服务配置多个 ID 生成器进行轮询和失败重试，多个服务进行负载均衡实现高可用
+
+        例如 部署三个服务，每个服务使用 10 个 workerId，总占用数量总共 30 个
+
+    存储接口实现：
+
+        org.lushen.mrh.id.generator.revision.achieve.RevisionMemoryRepository         基于内存存储(仅测试使用)
+
+        org.lushen.mrh.id.generator.revision.achieve.RevisionMysqlJdbcRepository      基于mysql存储(建议使用)
+
+        org.lushen.mrh.id.generator.revision.achieve.RevisionRedisRepository          基于redis存储(存在风险)
+
+        org.lushen.mrh.id.generator.revision.achieve.RevisionZookeeperRepository      基于zookeeper存储(存在风险)
+
+    存储接口使用 mysql 需要建数据库表：
+
+        CREATE TABLE `revision_alloc` (
+            `worker_id` int(4) NOT NULL COMMENT '工作节点ID',
+            `namespace` varchar(100) NOT NULL COMMENT '业务命名空间',
+            `expired` bigint(19) NOT NULL COMMENT '最大过期时间戳(毫秒)',
+            `create_time` datetime NOT NULL COMMENT '创建时间',
+            `modify_time` datetime DEFAULT NULL COMMENT '更新时间'
+            PRIMARY KEY (`worker_id`,`namespace`)
+        ) ENGINE=InnoDB COMMENT='revisionid 生成器信息存储表';
+
+    存储接口扩展：
+
+        org.lushen.mrh.id.generator.revision.RevisionRepository                      根据接口描述，实现此接口
 
 ## segment
 
@@ -177,12 +212,12 @@
     号段分配中间件，mysql 需要创建数据库表：
 
         CREATE TABLE `segment_alloc` (
-        `namespace` varchar(100) NOT NULL COMMENT '命名空间',
-        `max_value` bigint(19) NOT NULL COMMENT '最大已使用ID(不包括此值)',
-        `create_time` datetime NOT NULL COMMENT '创建时间',
-        `modify_time` datetime DEFAULT NULL COMMENT '更新时间',
-        `version` bigint(19) NOT NULL COMMENT '版本号',
-        PRIMARY KEY (`namespace`)
+            `namespace` varchar(100) NOT NULL COMMENT '命名空间',
+            `max_value` bigint(19) NOT NULL COMMENT '最大已使用ID(不包括此值)',
+            `create_time` datetime NOT NULL COMMENT '创建时间',
+            `modify_time` datetime DEFAULT NULL COMMENT '更新时间',
+            `version` bigint(19) NOT NULL COMMENT '版本号',
+            PRIMARY KEY (`namespace`)
         ) ENGINE=InnoDB COMMENT='号段 ID 生成器信息存储表';
 
     号段分配中间件，接口扩展：
