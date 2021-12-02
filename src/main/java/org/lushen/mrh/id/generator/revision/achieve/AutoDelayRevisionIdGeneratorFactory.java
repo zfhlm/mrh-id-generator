@@ -28,18 +28,14 @@ public class AutoDelayRevisionIdGeneratorFactory implements RevisionIdGeneratorF
 		if(config.getTimeToLive() == null) {
 			throw new IllegalArgumentException("timeToLive");
 		}
-		if(config.getThreshold() <= 0 || config.getThreshold() >= 100) {
-			throw new IllegalArgumentException("threshold");
+		if(config.getRemainingTimeToDelay() == null || config.getRemainingTimeToDelay().toMillis() >= config.getTimeToLive().toMillis()) {
+			throw new IllegalArgumentException("remainingTimeToDelay");
 		}
-		if(config.getInterval() == null) {
-			throw new IllegalArgumentException("interval");
-		}
-
+	
 		AutoDelayRevisionIdGenerator idGenerator = new AutoDelayRevisionIdGenerator(this.repository);
 		idGenerator.setEpochDate(config.getEpochDate());
-		idGenerator.setInterval(config.getInterval());
-		idGenerator.setThreshold(config.getThreshold());
 		idGenerator.setTimeToLive(config.getTimeToLive());
+		idGenerator.setRemainingTimeToDelay(config.getRemainingTimeToDelay());
 		idGenerator.start();
 
 		return idGenerator;

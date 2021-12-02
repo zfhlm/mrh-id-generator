@@ -29,6 +29,7 @@ public class TestSingle {
 		// 测试，可用时长 10 秒钟
 		RevisionProperties properties = RevisionProperties.buildDefault();
 		properties.setTimeToLive(Duration.ofSeconds(10L));
+		properties.setRemainingTimeToDelay(Duration.ofSeconds(3));
 
 		RevisionRepository repository = new RevisionRedisRepository(connectionFactory);
 

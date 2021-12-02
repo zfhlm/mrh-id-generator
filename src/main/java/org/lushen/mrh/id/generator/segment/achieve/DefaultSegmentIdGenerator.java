@@ -92,10 +92,9 @@ class DefaultSegmentIdGenerator extends SegmentProperties implements SegmentIdGe
 		if(this.scheduler == null) {
 
 			// 预加载逻辑，与直接加载共用一把锁
-			long point = this.range*this.threshold/100;
 			Runnable preload = () -> {
 				synchronized (this.loadLock) {
-					if(this.next == null && this.offset >= point) {
+					if(this.next == null && (this.range - this.offset <= this.remaining)) {
 						Segment segment = this.repository.next(this.range);
 						log.info("Preload segment " + segment);
 						this.next = segment;
@@ -104,7 +103,7 @@ class DefaultSegmentIdGenerator extends SegmentProperties implements SegmentIdGe
 			};
 
 			// 启动预加载调度线程
-			this.scheduler = new SingleScheduler(() -> this.interval.toMillis());
+			this.scheduler = new SingleScheduler(() -> 1000L);
 			this.scheduler.execute(preload);
 
 		}

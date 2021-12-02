@@ -18,9 +18,8 @@ public class RevisionConfiguration {
 	@Bean
 	public RevisionProperties revisionProperties() {
 		RevisionProperties properties = RevisionProperties.buildDefault();
-		properties.setInterval(Duration.ofSeconds(30L));
 		properties.setTimeToLive(Duration.ofMinutes(10));
-		properties.setThreshold(80);
+		properties.setRemainingTimeToDelay(Duration.ofSeconds(30));
 		return properties;
 	}
 

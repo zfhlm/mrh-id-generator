@@ -76,16 +76,16 @@
         @Bean
         public RevisionProperties revisionProperties() {
             RevisionProperties properties = RevisionProperties.buildDefault();
-            properties.setInterval(Duration.ofSeconds(30L));
             properties.setTimeToLive(Duration.ofMinutes(10));
+            properties.setRemainingTimeToDelay(Duration.ofSeconds(30));
             properties.setThreshold(80);
             return properties;
         }
 
-        // 创建生成器存储中间件接口，指定业务命名空间为 mytest
+        // 创建生成器存储中间件接口，指定业务命名空间为 myservice-name
         @Bean
         public RevisionRepository revisionRepository(DataSource dataSource) {
-            return new RevisionMysqlJdbcRepository("mytest", dataSource);
+            return new RevisionMysqlJdbcRepository("myservice-name", dataSource);
         }
 
         // 创建ID生成器
@@ -105,21 +105,19 @@
 
         epochDate              系统上线时间，一旦指定不可变动
 
-        timeToLive             初始化或延时时长，如果配置过长，应用重启、时钟回拨超过三次都会导致占用 workerId 一段可用时间，可能导致耗尽
+        timeToLive             初始或延时时长
 
-        threshold              延时阈值，范围(0,100)，需要根据 timeToLive 进行定义，在超时之前留有足够的时候去执行延时逻辑
+        remainingTimeToDelay   剩余多少时长触发延时，根据 timeToLive 合理配置，在超时之前留有足够的时候去执行延时逻辑
 
-        interval               延时检测时间间隔
+    生成器延时调度逻辑：
 
-    生成器逻辑：
+        1，应用启动获取一个可用的 workerId  及其 可用时间范围，实例化作为 当前 ID 生成器
 
-        首先获取一个可用的 workerId 及其 可用时间范围，实例化生成器
+        2，应用启动异步调度任务，对当前的 ID 生成器剩余可用时长进行检测，判断是否进行延时
 
-        异步调度任务，对当前的 ID 生成器 可用时间范围 进行检测，到达阈值延长 workerId 可用时间范围
+        3，调用方法生成 ID，如果 ID 等于 -1，表示生成器已经失效，触发同步获取另一个可用的 workId 及其 可用时间范围，实例化作为当前 ID 生成器
 
-        调用方法生成 ID，如果 ID 等于 -1，表示生成器已经失效，可能原因：延时失败、时钟回拨超过三次
-
-        当前 ID 生成器失效，触发同步获取另一个可用的 workId 及其 可用时间范围，实例化作为当前 ID 生成器
+        4，步骤 2/3 是各自执行的，通过锁进行并发控制，直到应用停止为止
 
     存储接口实现：
 
@@ -144,13 +142,11 @@
 
     存储接口扩展：
 
-        org.lushen.mrh.id.generator.revision.RevisionRepository                      根据接口描述，实现此接口
-
-        实现类最好能提供 号段命名空间 规则，对不同子服务的 workerId 进行划分，使每个子服务都有自己的 1024 个 workerId，互不影响
+        org.lushen.mrh.id.generator.revision.RevisionRepository                      实现此接口，并提供 业务命名空间 功能
 
     业务命名空间，例如有两个业务不同的服务 service-A、service-B，创建存储接口：
 
-        // 各自拥有 1024 个 workerId
+        // 各自拥有 1024 个 workerId，互相之间不影响
 
         // service-A
         @Bean
@@ -166,13 +162,16 @@
 
 ## segment
 
-    号段 ID 生成器，基于 springboot 使用示例：
+    号段 ID 生成器，借鉴了美团 Leaf ID 生成器
+
+    基于 springboot 使用示例：
 
         // 创建号段配置
         @Bean
         public SegmentProperties segmentProperties() {
             SegmentProperties properties = SegmentProperties.buildDefault();
             properties.setRange(1000);
+            properties.setRemaining(200);
             return properties;
         }
 
@@ -199,13 +198,7 @@
 
         range           每次拉取多少号段到内存中，根据并发进行，频繁重启会导致未使用号段被浪费，范围 (0, N)
 
-        threshold       号段预加载百分比阈值，当号段已使用达到阈值，进行备用预加载，范围 (0, 100)
-
-        interval        号段预加载检测时间间隔，范围 (0, N)
-
-        参数 threshold、interval 影响预加载号段，配置不合理，会导致当前号段被用光，预加载未完成
-
-        如果预加载未完成，ID 生成器会进行直接加载，性能变低，且打乱递增
+        remaining       号段剩余多少，进行备用预加载，范围 (0, range)，如果来不及预加载，ID 生成时会进行直接加载
 
     号段分配中间件，已存在接口实现：
 
@@ -230,12 +223,4 @@
 
     号段分配中间件，接口扩展：
 
-        实现接口 org.lushen.mrh.id.generator.segment.SegmentRepository
-
-        实现类最好能提供 号段命名空间 规则，对不同服务的 号段 进行划分，使每个服务都有自己的号段，互不影响
-
-    号段生成器：
-
-        借鉴了美团 Leaf ID 生成器思想，采用 内存双号段 的思想，生成范围从 1 开始，直至 long 正数值耗尽
-
-        具体参考实现类 org.lushen.mrh.id.generator.segment.achieve.DefaultSegmentIdGenerator
+        实现接口 org.lushen.mrh.id.generator.segment.SegmentRepository            实现此接口，提供 号段命名空间 功能

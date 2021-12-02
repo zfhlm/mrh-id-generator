@@ -16,6 +16,7 @@ public class TestSingle {
 
 		RevisionProperties properties = RevisionProperties.buildDefault();
 		properties.setTimeToLive(Duration.ofSeconds(10L));
+		properties.setRemainingTimeToDelay(Duration.ofSeconds(3));
 		RevisionIdGenerator idGenerator = new AutoDelayRevisionIdGeneratorFactory(repository).create(properties);
 
 		for(int i=0; i<30000; i++) {

@@ -22,21 +22,17 @@ public class DefaultSegmentIdGeneratorFactory implements SegmentIdGeneratorFacto
 	@Override
 	public SegmentIdGenerator create(SegmentProperties config) {
 
-		if(config.getInterval() == null) {
-			throw new IllegalArgumentException("interval");
-		}
 		if(config.getRange() <= 0) {
 			throw new IllegalArgumentException("range");
 		}
-		if(config.getThreshold() <=0 || config.getThreshold() >= 100) {
-			throw new IllegalArgumentException("threshold");
+		if(config.getRemaining() <=0 || config.getRemaining() >= config.getRange()) {
+			throw new IllegalArgumentException("remaining");
 		}
 
 		// 实例化并启动 ID生成器
 		DefaultSegmentIdGenerator idGenerator = new DefaultSegmentIdGenerator(this.repository);
-		idGenerator.setInterval(config.getInterval());
 		idGenerator.setRange(config.getRange());
-		idGenerator.setThreshold(config.getThreshold());
+		idGenerator.setRemaining(config.getRemaining());
 		idGenerator.start();
 
 		return idGenerator;

@@ -18,7 +18,7 @@ public class TestSegmentGenerator {
 		SegmentMysqlJdbcRepository repository = new SegmentMysqlJdbcRepository("test", dataSource);
 
 		SegmentProperties properties = SegmentProperties.buildDefault();
-		properties.setThreshold(20);
+		properties.setRemaining(2);
 		properties.setRange(10);
 		SegmentIdGenerator generator = new DefaultSegmentIdGeneratorFactory(repository).create(properties);
 

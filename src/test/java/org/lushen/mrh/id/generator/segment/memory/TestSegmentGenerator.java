@@ -10,7 +10,7 @@ public class TestSegmentGenerator {
 	public static void main(String[] args) throws Exception {
 		
 		SegmentProperties properties = SegmentProperties.buildDefault();
-		properties.setThreshold(20);
+		properties.setRemaining(2);
 		properties.setRange(10);
 
 		SegmentMemoryRepository repository = new SegmentMemoryRepository();

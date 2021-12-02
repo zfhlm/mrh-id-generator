@@ -16,6 +16,7 @@ public class TestConcurrent {
 
 		RevisionProperties properties = RevisionProperties.buildDefault();
 		properties.setTimeToLive(Duration.ofSeconds(10L));
+		properties.setRemainingTimeToDelay(Duration.ofSeconds(3));
 		
 		// 并发创建
 		for(int index=0; index<100; index++) {

@@ -26,8 +26,6 @@ class AutoDelayRevisionIdGenerator extends RevisionProperties implements Revisio
 
 	private DefaultRevisionIdGenerator idGenerator;		// ID 生成器
 
-	private long criticalPoint = -1;					// 剩余多少毫秒开始延时
-
 	AutoDelayRevisionIdGenerator(RevisionRepository repository) {
 		super();
 		this.repository = repository;
@@ -69,7 +67,7 @@ class AutoDelayRevisionIdGenerator extends RevisionProperties implements Revisio
 
 		// 启动延时调度器
 		if(this.scheduler == null) {
-			this.scheduler = new SingleScheduler(() -> this.interval.toMillis());
+			this.scheduler = new SingleScheduler(() -> 1000L);
 			this.scheduler.execute(() -> {
 				synchronized (this) {
 					delayIdGenerator();
@@ -89,20 +87,14 @@ class AutoDelayRevisionIdGenerator extends RevisionProperties implements Revisio
 
 	// 延时 ID 生成器
 	private void delayIdGenerator() {
-		if(this.criticalPoint == -1) {
-			this.criticalPoint = this.timeToLive.multipliedBy(100-this.threshold).dividedBy(100).toMillis();
-		} else {
-			if(this.idGenerator.getExpiredAt() - System.currentTimeMillis() <= this.criticalPoint) {
-				try {
-					int workerId = this.idGenerator.getWorkerId();
-					long expired = this.idGenerator.getExpiredAt();
-					RevisionNode node = this.repository.delay(workerId, expired, this.timeToLive);
-					this.idGenerator.delay(node.getExpired());
-				} catch (Exception e) {
-					if(log.isDebugEnabled()) {
-						log.debug(e.getMessage());
-					}
-				}
+		if(this.idGenerator.getExpiredAt() - System.currentTimeMillis() <= this.remainingTimeToDelay.toMillis()) {
+			try {
+				int workerId = this.idGenerator.getWorkerId();
+				long expired = this.idGenerator.getExpiredAt();
+				RevisionNode node = this.repository.delay(workerId, expired, this.timeToLive);
+				this.idGenerator.delay(node.getExpired());
+			} catch (Exception e) {
+				log.warn(e.getMessage());
 			}
 		}
 	}
