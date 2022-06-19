@@ -4,7 +4,6 @@ import java.nio.charset.StandardCharsets;
 
 import org.lushen.mrh.id.generator.segment.Segment;
 import org.lushen.mrh.id.generator.segment.SegmentRepository;
-import org.lushen.mrh.id.generator.supports.NamespaceSupport;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 
@@ -13,16 +12,12 @@ import org.springframework.data.redis.connection.RedisConnectionFactory;
  * 
  * @author hlm
  */
-public class SegmentRedisRepository extends NamespaceSupport implements SegmentRepository {
+public class SegmentRedisRepository implements SegmentRepository {
 
 	private final RedisConnectionFactory connectionFactory;
 
 	public SegmentRedisRepository(RedisConnectionFactory connectionFactory) {
-		this(null, connectionFactory);
-	}
-
-	public SegmentRedisRepository(String namespace, RedisConnectionFactory connectionFactory) {
-		super(namespace);
+		super();
 		if(connectionFactory == null) {
 			throw new IllegalArgumentException("connectionFactory is null");
 		}
@@ -30,11 +25,11 @@ public class SegmentRedisRepository extends NamespaceSupport implements SegmentR
 	}
 
 	@Override
-	public Segment next(int range) {
+	public Segment next(String namespace, int range) {
 		RedisConnection connection = null;
 		try {
 			connection = this.connectionFactory.getConnection();
-			long maxValue = connection.incrBy(this.namespace.getBytes(StandardCharsets.UTF_8), (long)range);
+			long maxValue = connection.incrBy(namespace.getBytes(StandardCharsets.UTF_8), (long)range);
 			return new Segment(maxValue-range+1, maxValue);
 		} finally {
 			if(connection != null) {

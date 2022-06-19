@@ -1,8 +1,8 @@
 package org.lushen.mrh.id.generator.segment.memory;
 
 import org.lushen.mrh.id.generator.segment.SegmentIdGenerator;
+import org.lushen.mrh.id.generator.segment.SegmentIdGeneratorFactory;
 import org.lushen.mrh.id.generator.segment.SegmentProperties;
-import org.lushen.mrh.id.generator.segment.achieve.DefaultSegmentIdGeneratorFactory;
 import org.lushen.mrh.id.generator.segment.achieve.SegmentMemoryRepository;
 
 public class TestSegmentGenerator {
@@ -14,7 +14,7 @@ public class TestSegmentGenerator {
 		properties.setRange(10);
 
 		SegmentMemoryRepository repository = new SegmentMemoryRepository();
-		SegmentIdGenerator generator = new DefaultSegmentIdGeneratorFactory(repository).create(properties);
+		SegmentIdGenerator generator = new SegmentIdGeneratorFactory(repository).create(properties);
 
 		for(int i=0; i<60; i++) {
 			Thread.sleep(1000L);

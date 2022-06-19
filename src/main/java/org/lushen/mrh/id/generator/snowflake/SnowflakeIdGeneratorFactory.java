@@ -1,5 +1,7 @@
 package org.lushen.mrh.id.generator.snowflake;
 
+import java.time.ZoneOffset;
+
 import org.lushen.mrh.id.generator.IdGeneratorFactory;
 
 /**
@@ -7,4 +9,18 @@ import org.lushen.mrh.id.generator.IdGeneratorFactory;
  * 
  * @author hlm
  */
-public interface SnowflakeIdGeneratorFactory extends IdGeneratorFactory<SnowflakeIdGenerator, SnowflakeProperties> {}
+public class SnowflakeIdGeneratorFactory implements IdGeneratorFactory<SnowflakeProperties> {
+
+	@Override
+	public SnowflakeIdGenerator create(SnowflakeProperties config) {
+
+		if(config.getEpochDate() == null) {
+			throw new IllegalArgumentException("epochDate is null");
+		}
+
+		long epochAt = config.getEpochDate().atStartOfDay(ZoneOffset.ofHours(8)).toInstant().toEpochMilli();
+
+		return new SnowflakeIdGenerator(epochAt, config.getDataCenterId(), config.getWorkerId());
+	}
+
+}

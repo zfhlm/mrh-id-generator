@@ -10,8 +10,10 @@ public interface SegmentRepository {
 	/**
 	 * 获取下一个号段
 	 * 
-	 * @param range 号段长度
+	 * @param namespace		业务命名空间
+	 * @param range 		号段长度
+	 * @return
 	 */
-	public Segment next(int range);
+	public Segment next(String namespace, int range);
 
 }

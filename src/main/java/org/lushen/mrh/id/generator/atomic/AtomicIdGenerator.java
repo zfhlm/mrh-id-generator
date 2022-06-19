@@ -1,5 +1,7 @@
 package org.lushen.mrh.id.generator.atomic;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 import org.lushen.mrh.id.generator.IdGenerator;
 
 /**
@@ -7,4 +9,18 @@ import org.lushen.mrh.id.generator.IdGenerator;
  * 
  * @author hlm
  */
-public interface AtomicIdGenerator extends IdGenerator {}
+public class AtomicIdGenerator implements IdGenerator {
+
+	private final AtomicLong atomic;
+
+	AtomicIdGenerator(long seed) {
+		super();
+		this.atomic = new AtomicLong(seed);
+	}
+
+	@Override
+	public long generate() {
+		return atomic.getAndIncrement();
+	}
+
+}

@@ -12,11 +12,11 @@ public class TestSegmentMysqlRepository {
 		dataSource.setUsername("root");
 		dataSource.setPassword("123456");
 		dataSource.setUrl("jdbc:mysql://192.168.140.210:3306/test?useUnicode=true&characterEncoding=UTF-8&serverTimezone=GMT%2B8");
-		SegmentMysqlJdbcRepository repository = new SegmentMysqlJdbcRepository("test", dataSource);
+		SegmentMysqlJdbcRepository repository = new SegmentMysqlJdbcRepository(dataSource);
 
-		System.out.println("第1个号段：" + repository.next(10000));
-		System.out.println("第2个号段：" + repository.next(10000));
-		System.out.println("第3个号段：" + repository.next(1000));
+		System.out.println("第1个号段：" + repository.next("service-test", 10000));
+		System.out.println("第2个号段：" + repository.next("service-test", 10000));
+		System.out.println("第3个号段：" + repository.next("service-test", 1000));
 
 	}
 

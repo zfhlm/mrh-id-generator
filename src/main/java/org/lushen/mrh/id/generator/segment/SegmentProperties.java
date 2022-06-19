@@ -7,6 +7,12 @@ package org.lushen.mrh.id.generator.segment;
  */
 public class SegmentProperties {
 
+	private static final String DEFAULT_NAMESPACE = "default";
+
+	private static final int DEFAULT_RANGE = 10000;
+
+	private static final int DEFAULT_REMAINING = 5000;
+
 	/**
 	 * 创建一份默认配置
 	 * 
@@ -14,14 +20,29 @@ public class SegmentProperties {
 	 */
 	public static final SegmentProperties buildDefault() {
 		SegmentProperties properties = new SegmentProperties();
-		properties.setRange(10000);
-		properties.setRemaining(5000);
+		properties.setNamespace(DEFAULT_NAMESPACE);
+		properties.setRange(DEFAULT_RANGE);
+		properties.setRemaining(DEFAULT_REMAINING);
 		return properties;
 	}
 
-	protected int range;				// 每次拉取号段长度
+	protected String namespace;				// 业务命名空间
 
-	protected int remaining;			// 剩余多少号段进行预加载
+	protected int range;					// 每次拉取号段长度
+
+	protected int remaining;				// 剩余多少号段进行预加载
+
+	protected SegmentProperties() {
+		super();
+	}
+
+	public String getNamespace() {
+		return namespace;
+	}
+
+	public void setNamespace(String namespace) {
+		this.namespace = namespace;
+	}
 
 	public int getRange() {
 		return range;
@@ -42,7 +63,9 @@ public class SegmentProperties {
 	@Override
 	public String toString() {
 		StringBuilder builder = new StringBuilder();
-		builder.append("[range=");
+		builder.append("[namespace=");
+		builder.append(namespace);
+		builder.append(", range=");
 		builder.append(range);
 		builder.append(", remaining=");
 		builder.append(remaining);

@@ -6,10 +6,6 @@ import java.sql.ResultSet;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.lushen.mrh.id.generator.supports.function.Consumer;
-import org.lushen.mrh.id.generator.supports.function.Function;
-import org.lushen.mrh.id.generator.supports.function.Supplier;
-
 /**
  * jdbc 执行器
  * 
@@ -20,9 +16,9 @@ public class JdbcExecutor {
 	/**
 	 * 事务执行自定义接口逻辑
 	 * 
-	 * @param doGetConnection
-	 * @param releaseConnection
-	 * @param executing
+	 * @param doGetConnection		获取连接回调
+	 * @param releaseConnection		释放连接回调
+	 * @param executing				业务逻辑
 	 * @return
 	 */
 	public static final <T> T executeWithTransaction(Supplier<Connection> doGetConnection, Consumer<Connection> releaseConnection, Function<Connection, T> executing) {
@@ -46,7 +42,7 @@ public class JdbcExecutor {
 					ex.printStackTrace();
 				}
 			}
-			throw new RuntimeException(e.getMessage(), e);
+			throw new JdbcException(e.getMessage(), e);
 		} finally {
 			// 重置自动提交
 			if(connection != null) {
@@ -63,10 +59,10 @@ public class JdbcExecutor {
 	/**
 	 * 查询第一条数据
 	 * 
-	 * @param conn
-	 * @param sql
-	 * @param converter
-	 * @param parameters
+	 * @param conn				数据库连接
+	 * @param sql				SQL
+	 * @param converter			查询结果转换逻辑
+	 * @param parameters		SQL参数
 	 * @return
 	 * @throws JdbcException
 	 */
@@ -77,10 +73,11 @@ public class JdbcExecutor {
 	/**
 	 * 查询数据
 	 * 
-	 * @param conn
-	 * @param sql
-	 * @param converter
-	 * @param parameters
+	 * @param conn				数据库连接
+	 * @param sql				SQL
+	 * @param converter			查询结果转换逻辑
+	 * @param parameters		SQL参数
+	 * @return
 	 * @throws JdbcException
 	 */
 	public static final <T> List<T> executeQuery(Connection conn, String sql, Function<ResultSet,T> converter, Object... parameters) throws JdbcException {
@@ -116,9 +113,9 @@ public class JdbcExecutor {
 	/**
 	 * 更新数据
 	 * 
-	 * @param conn
-	 * @param sql
-	 * @param parameters
+	 * @param conn				数据库连接
+	 * @param sql				SQL
+	 * @param parameters		SQL参数
 	 * @return
 	 * @throws JdbcException
 	 */
@@ -133,6 +130,11 @@ public class JdbcExecutor {
 		}
 	}
 
+	/**
+	 * 自定义 jdbc 异常
+	 * 
+	 * @author hlm
+	 */
 	@SuppressWarnings("serial")
 	public static class JdbcException extends RuntimeException {
 

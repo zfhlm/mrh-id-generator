@@ -12,11 +12,11 @@ public class TestRepository {
 		
 		while(true) {
 			Thread.sleep(1000L);
-			repository.next(System.currentTimeMillis(), Duration.ofSeconds(10));
-			repository.next(System.currentTimeMillis(), Duration.ofSeconds(10));
-			repository.next(System.currentTimeMillis(), Duration.ofSeconds(10));
-			repository.next(System.currentTimeMillis(), Duration.ofSeconds(10));
-			repository.next(System.currentTimeMillis(), Duration.ofSeconds(10));
+			repository.attempt("test", Duration.ofSeconds(10));
+			repository.attempt("test", Duration.ofSeconds(10));
+			repository.attempt("test", Duration.ofSeconds(10));
+			repository.attempt("test", Duration.ofSeconds(10));
+			repository.attempt("test", Duration.ofSeconds(10));
 		}
 		
 	}

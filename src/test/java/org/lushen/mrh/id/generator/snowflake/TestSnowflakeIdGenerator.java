@@ -1,7 +1,6 @@
 package org.lushen.mrh.id.generator.snowflake;
 
 import org.lushen.mrh.id.generator.IdGenerator;
-import org.lushen.mrh.id.generator.snowflake.achieve.DefaultSnowflakeIdGeneratorFactory;
 
 public class TestSnowflakeIdGenerator {
 
@@ -9,7 +8,7 @@ public class TestSnowflakeIdGenerator {
 
 		// 从启动参数加载配置
 		SnowflakeProperties properties = SnowflakeProperties.buildFromSystem();
-		IdGenerator idGenerator = new DefaultSnowflakeIdGeneratorFactory().create(properties);
+		IdGenerator idGenerator = new SnowflakeIdGeneratorFactory().create(properties);
 
 		// 调整本地时间，模拟时钟回拨
 		for(int i=0; i<100; i++) {

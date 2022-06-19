@@ -2,6 +2,9 @@ package org.lushen.mrh.id.generator.revision;
 
 import java.time.Duration;
 
+import org.lushen.mrh.id.generator.revision.RevisionException.RevisionMatchFailureException;
+import org.lushen.mrh.id.generator.revision.RevisionTarget.RevisionAvailable;
+
 /**
  * revision 持久化接口，实现类必须解决并发冲突问题
  * 
@@ -10,22 +13,26 @@ import java.time.Duration;
 public interface RevisionRepository {
 
 	/**
-	 * 获取可用节点
+	 * 获取一个可用节点
 	 * 
-	 * @param begin			当前时间戳
+	 * @param namespace		业务命名空间
 	 * @param timeToLive	获取时长
-	 * @return not null
+	 * @return
+	 * @throws RevisionException 获取节点异常
 	 */
-	public RevisionNode next(long begin, Duration timeToLive);
+	public RevisionAvailable attempt(String namespace, Duration timeToLive) throws RevisionException;
 
 	/**
-	 * 延时指定节点，expired 不一致必须抛出异常
 	 * 
-	 * @param workerId		当前节点ID
-	 * @param expired		当前节点过期时间戳
-	 * @param timeToLive	当前节点延时时长
-	 * @return not null
+	 * 获取指定节点（与数据源存储的 expiredAt 进行对比，相同则获取该节点）
+	 * 
+	 * @param namespace		业务命名空间
+	 * @param timeToLive	获取时长
+	 * @param target		目标节点
+	 * @return
+	 * @throws RevisionException 获取节点异常
+	 * @throws RevisionMatchFailureException 获取节点 expired 匹配异常
 	 */
-	public RevisionNode delay(int workerId, long expired, Duration timeToLive);
+	public RevisionAvailable attempt(String namespace, Duration timeToLive, RevisionTarget target) throws RevisionException, RevisionMatchFailureException;
 
 }

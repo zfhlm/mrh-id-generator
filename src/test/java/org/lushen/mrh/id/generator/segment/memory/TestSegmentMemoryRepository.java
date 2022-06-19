@@ -8,9 +8,9 @@ public class TestSegmentMemoryRepository {
 
 		SegmentMemoryRepository repository = new SegmentMemoryRepository();
 
-		System.out.println("第1个号段：" + repository.next(10000));
-		System.out.println("第2个号段：" + repository.next(10000));
-		System.out.println("第3个号段：" + repository.next(1000));
+		System.out.println("第1个号段：" + repository.next("service-test", 10000));
+		System.out.println("第2个号段：" + repository.next("service-test", 10000));
+		System.out.println("第3个号段：" + repository.next("service-test", 1000));
 
 	}
 

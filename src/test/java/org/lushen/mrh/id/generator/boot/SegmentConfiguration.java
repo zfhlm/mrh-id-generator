@@ -2,10 +2,10 @@ package org.lushen.mrh.id.generator.boot;
 
 import javax.sql.DataSource;
 
-import org.lushen.mrh.id.generator.segment.SegmentIdGenerator;
+import org.lushen.mrh.id.generator.IdGenerator;
+import org.lushen.mrh.id.generator.segment.SegmentIdGeneratorFactory;
 import org.lushen.mrh.id.generator.segment.SegmentProperties;
 import org.lushen.mrh.id.generator.segment.SegmentRepository;
-import org.lushen.mrh.id.generator.segment.achieve.DefaultSegmentIdGeneratorFactory;
 import org.lushen.mrh.id.generator.segment.achieve.SegmentMysqlJdbcRepository;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -22,12 +22,12 @@ public class SegmentConfiguration {
 
 	@Bean
 	public SegmentRepository segmentRepository(DataSource dataSource) {
-		return new SegmentMysqlJdbcRepository("mytest", dataSource);
+		return new SegmentMysqlJdbcRepository(dataSource);
 	}
 
 	@Bean
-	public SegmentIdGenerator segmentIdGenerator(SegmentRepository repository, SegmentProperties properties) {
-		return new DefaultSegmentIdGeneratorFactory(repository).create(properties);
+	public IdGenerator segmentIdGenerator(SegmentRepository repository, SegmentProperties properties) {
+		return new SegmentIdGeneratorFactory(repository).create(properties);
 	}
 
 }

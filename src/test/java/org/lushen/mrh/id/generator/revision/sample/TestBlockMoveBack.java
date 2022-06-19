@@ -4,8 +4,7 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 
-import org.lushen.mrh.id.generator.revision.RevisionIdGenerator;
-import org.lushen.mrh.id.generator.revision.achieve.DefaultRevisionIdGenerator;
+import org.lushen.mrh.id.generator.revision.RevisionIdGenerator.InnerRevisionIdGenerator;
 
 public class TestBlockMoveBack {
 
@@ -15,7 +14,7 @@ public class TestBlockMoveBack {
 		long minTimestamp = System.currentTimeMillis();
 		long maxTimestamp = minTimestamp + 10*60*1000L;
 
-		RevisionIdGenerator idGenerator = new DefaultRevisionIdGenerator(epochTimestamp, 0, minTimestamp, maxTimestamp);
+		InnerRevisionIdGenerator idGenerator = new InnerRevisionIdGenerator(epochTimestamp, 0, minTimestamp, maxTimestamp);
 
 		// 调整本地时间，模拟时钟回拨
 		for(int i=0; i<10000; i++) {

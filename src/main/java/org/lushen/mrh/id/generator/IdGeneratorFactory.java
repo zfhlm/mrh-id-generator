@@ -6,7 +6,7 @@ package org.lushen.mrh.id.generator;
  * @author hlm
  * @param <T>
  */
-public interface IdGeneratorFactory<T extends IdGenerator, C> {
+public interface IdGeneratorFactory<C> {
 
 	/**
 	 * 创建 ID 生成器
@@ -14,6 +14,6 @@ public interface IdGeneratorFactory<T extends IdGenerator, C> {
 	 * @param config
 	 * @return
 	 */
-	public T create(C config);
+	public IdGenerator create(C config);
 
 }

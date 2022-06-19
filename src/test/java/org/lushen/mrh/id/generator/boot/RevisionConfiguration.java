@@ -4,10 +4,10 @@ import java.time.Duration;
 
 import javax.sql.DataSource;
 
-import org.lushen.mrh.id.generator.revision.RevisionIdGenerator;
+import org.lushen.mrh.id.generator.IdGenerator;
+import org.lushen.mrh.id.generator.revision.RevisionIdGeneratorFactory;
 import org.lushen.mrh.id.generator.revision.RevisionProperties;
 import org.lushen.mrh.id.generator.revision.RevisionRepository;
-import org.lushen.mrh.id.generator.revision.achieve.AutoDelayRevisionIdGeneratorFactory;
 import org.lushen.mrh.id.generator.revision.achieve.RevisionMysqlJdbcRepository;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -25,12 +25,12 @@ public class RevisionConfiguration {
 
 	@Bean
 	public RevisionRepository revisionRepository(DataSource dataSource) {
-		return new RevisionMysqlJdbcRepository("mytest", dataSource);
+		return new RevisionMysqlJdbcRepository(dataSource);
 	}
 
 	@Bean
-	public RevisionIdGenerator revisionIdGenerator(RevisionRepository repository, RevisionProperties properties) {
-		return new AutoDelayRevisionIdGeneratorFactory(repository).create(properties);
+	public IdGenerator revisionIdGenerator(RevisionRepository repository, RevisionProperties properties) {
+		return new RevisionIdGeneratorFactory(repository).create(properties);
 	}
 
 }

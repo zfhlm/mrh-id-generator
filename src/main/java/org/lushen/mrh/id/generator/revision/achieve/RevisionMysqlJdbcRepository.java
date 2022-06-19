@@ -1,6 +1,6 @@
 package org.lushen.mrh.id.generator.revision.achieve;
 
-import static org.lushen.mrh.id.generator.revision.achieve.DefaultRevisionIdGenerator.maxWorkerId;
+import static org.lushen.mrh.id.generator.revision.RevisionIdGenerator.InnerRevisionIdGenerator.maxWorkerId;
 
 import java.time.Duration;
 import java.util.List;
@@ -13,28 +13,26 @@ import javax.sql.DataSource;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.lushen.mrh.id.generator.revision.RevisionNode;
+import org.lushen.mrh.id.generator.revision.RevisionException;
+import org.lushen.mrh.id.generator.revision.RevisionException.RevisionMatchFailureException;
 import org.lushen.mrh.id.generator.revision.RevisionRepository;
+import org.lushen.mrh.id.generator.revision.RevisionTarget;
+import org.lushen.mrh.id.generator.revision.RevisionTarget.RevisionAvailable;
 import org.lushen.mrh.id.generator.supports.JdbcExecutor;
-import org.lushen.mrh.id.generator.supports.NamespaceSupport;
 
 /**
  * revision 持久化接口 mysql jdbc 实现，使用 select for update 悲观锁进行并发控制（因为数据量很少速度更快，使用乐观锁冲突概率非常高）
  * 
  * @author hlm
  */
-public class RevisionMysqlJdbcRepository extends NamespaceSupport implements RevisionRepository {
+public class RevisionMysqlJdbcRepository implements RevisionRepository {
 
 	private final Log log = LogFactory.getLog(RevisionMysqlJdbcRepository.class.getSimpleName());
 
 	private final DataSource dataSource;
 
 	public RevisionMysqlJdbcRepository(DataSource dataSource) {
-		this(null, dataSource);
-	}
-
-	public RevisionMysqlJdbcRepository(String namespace, DataSource dataSource) {
-		super(namespace);
+		super();
 		if(dataSource == null) {
 			throw new IllegalArgumentException("dataSource is null");
 		}
@@ -42,30 +40,33 @@ public class RevisionMysqlJdbcRepository extends NamespaceSupport implements Rev
 	}
 
 	@Override
-	public RevisionNode next(long begin, Duration timeToLive) {
+	public RevisionAvailable attempt(String namespace, Duration timeToLive) throws RevisionException {
 
 		return JdbcExecutor.executeWithTransaction(() -> dataSource.getConnection(), conn -> conn.close(), conn -> {
 
 			// 查询所有工作节点
 			String queryForUpdate = "select * from revision_alloc where namespace=? order by worker_id asc for update";
-			List<RevisionNode> nodes = JdbcExecutor.executeQuery(conn, queryForUpdate, (rs -> {
-				return new RevisionNode(rs.getInt("worker_id"), rs.getLong("expired"));
-			}), this.namespace);
+			List<RevisionTarget> nodes = JdbcExecutor.executeQuery(conn, queryForUpdate, (rs -> {
+				return new RevisionTarget(rs.getInt("worker_id"), rs.getLong("expired"));
+			}), namespace);
 
-			RevisionNode expiredNode = nodes.stream().filter(e -> e.getExpired() < begin).findFirst().orElse(null);
+			long beginAt = System.currentTimeMillis();
+			
+			// 获取到期节点
+			RevisionTarget expiredNode = nodes.stream().filter(e -> e.getExpiredAt() < beginAt).findFirst().orElse(null);
 
 			if(expiredNode != null) {
 
 				//更新过期节点
-				RevisionNode node = new RevisionNode(expiredNode.getWorkerId(), begin+timeToLive.toMillis());
+				RevisionTarget node = new RevisionTarget(expiredNode.getWorkerId(), beginAt+timeToLive.toMillis());
 				String update = "update `revision_alloc` set expired=?, modify_time=now() where worker_id=? and namespace=?";
-				JdbcExecutor.executeUpdate(conn, update, node.getExpired(), node.getWorkerId(), this.namespace);
+				JdbcExecutor.executeUpdate(conn, update, node.getExpiredAt(), node.getWorkerId(), namespace);
 
 				if(log.isInfoEnabled()) {
 					log.info("Update node " + node);
 				}
 
-				return Optional.of(node);
+				return Optional.of(new RevisionAvailable(node.getWorkerId(), beginAt, node.getExpiredAt()));
 
 			}
 
@@ -76,52 +77,55 @@ public class RevisionMysqlJdbcRepository extends NamespaceSupport implements Rev
 			if(workerId != -1) {
 
 				// 新增节点
-				RevisionNode node = new RevisionNode(workerId, begin+timeToLive.toMillis());
+				RevisionTarget node = new RevisionTarget(workerId, beginAt+timeToLive.toMillis());
 				String insert = "insert into `revision_alloc`(worker_id, namespace, expired, create_time, modify_time) values (?, ?, ?, now(), now())";
-				JdbcExecutor.executeUpdate(conn, insert, node.getWorkerId(), this.namespace, node.getExpired());
+				JdbcExecutor.executeUpdate(conn, insert, node.getWorkerId(), namespace, node.getExpiredAt());
 
 				if(log.isInfoEnabled()) {
 					log.info("Add node " + node);
 				}
 
-				return Optional.of(node);
+				return Optional.of(new RevisionAvailable(node.getWorkerId(), beginAt, node.getExpiredAt()));
 
 			}
 
-			return Optional.<RevisionNode>empty();
+			return Optional.<RevisionAvailable>empty();
 
-		}).orElseThrow(() -> new RuntimeException("No workId available"));
+		}).orElseThrow(() -> new RevisionException("No workId available"));
 
 	}
 
 	@Override
-	public RevisionNode delay(int workerId, long expired, Duration timeToLive) {
+	public RevisionAvailable attempt(String namespace, Duration timeToLive, RevisionTarget target) throws RevisionException, RevisionMatchFailureException {
 
 		return JdbcExecutor.executeWithTransaction(() -> dataSource.getConnection(), conn -> conn.close(), conn -> {
 
+			int workerId = target.getWorkerId();
+			long expiredAt = target.getExpiredAt();
+
 			// 查询节点数据
 			String selectForUpdate = "select * from `revision_alloc` where worker_id=? and namespace=? for update";
-			RevisionNode passNode = JdbcExecutor.executeQueryFirst(conn, selectForUpdate, (rs -> {
-				return new RevisionNode(rs.getInt("worker_id"), rs.getLong("expired"));
-			}), workerId, this.namespace);
+			RevisionTarget passNode = JdbcExecutor.executeQueryFirst(conn, selectForUpdate, (rs -> {
+				return new RevisionTarget(rs.getInt("worker_id"), rs.getLong("expired"));
+			}), workerId, namespace);
 
-			// 版本号不匹配
-			if(passNode == null || passNode.getExpired() != expired) {
-				return Optional.<RevisionNode>empty();
+			// 过期时间不匹配(已被占用)
+			if(passNode == null || passNode.getExpiredAt() != expiredAt) {
+				return Optional.<RevisionAvailable>empty();
 			}
 
 			// 更新节点数据
-			RevisionNode newNode = new RevisionNode(workerId, expired+timeToLive.toMillis());
+			RevisionTarget newNode = new RevisionTarget(workerId, expiredAt+timeToLive.toMillis());
 			String update = "update `revision_alloc` set expired=?, modify_time=now() where worker_id=? and namespace=?";
-			JdbcExecutor.executeUpdate(conn, update, newNode.getExpired(), newNode.getWorkerId(), this.namespace);
+			JdbcExecutor.executeUpdate(conn, update, newNode.getExpiredAt(), newNode.getWorkerId(), namespace);
 
 			if(log.isInfoEnabled()) {
-				log.info("Delay node " + newNode);
+				log.info("Update target node " + newNode);
 			}
 
-			return Optional.of(newNode);
+			return Optional.of(new RevisionAvailable(workerId, expiredAt+1, newNode.getExpiredAt()));
 
-		}).orElseThrow(() -> new RuntimeException(String.format("Failed to delay node [%s] with expired [%s] !", workerId, expired)));
+		}).orElseThrow(() -> new RevisionMatchFailureException(target.toString()));
 
 	}
 

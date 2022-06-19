@@ -46,15 +46,17 @@
 
         epochDate          系统上线时间，一旦指定不可变动
 
-        dataCenterId       数据中心节点ID，范围 [0, 31)
+        dataCenterId       数据中心节点ID，范围 [0, 32)
 
-        workerId           工作节点ID，范围 [0, 31)
+        workerId           工作节点ID，范围 [0, 32)
 
-    该生成器未解决时钟回拨问题，无法直接使用，服务器 NTP 会导致 ID 冲突
+    存在缺陷：
+
+        原生的生成器未解决时钟回拨问题，无法直接使用，服务器 NTP 时钟回拨会导致 ID 冲突
 
 ## revision
 
-    基于 snowflake 自定义变种生成器，结构和特点：
+    基于 snowflake 的实现原理，自定义变种生成器，结构和特点：
 
        +------------------+------------------+------------------+------------------+------------------+
        +      1 bit       +      41 bit      +     10 bit       +      2 bit       +      10 bit      +
@@ -62,13 +64,13 @@
        +     固定取整     +    毫秒时间戳    +     工作节点     + 时钟回拨滚动次数 +     计数序列号   +
        +------------------+------------------+------------------+------------------+------------------+
 
-       1，支持时长 2^41 毫秒，大约69年
+       1，支持时长 2^41 毫秒，大约69年 (与 snowflake 一致)
 
-       2，支持 2^10 = 1024 个 workerId
+       2，支持 2^10 = 1024 个 workerId (将 snowflake 的两个参数 workerId、dataCenterId 合并为一个参数)
 
-       3，支持自动处理 2^2 - 1 = 3 次时钟回拨（减初始 00 bits，可用 01、10、11 bits）
+       3，支持自动处理 2^2 - 1 = 3 次时钟回拨（减初始 00 bits，可用 01、10、11 bits） (自定义参数，占用 2 bit)
 
-       4，降低计数序列号为 10 bit，即支持最大每秒 102.4 万个 ID 生成
+       4，降低计数序列号为 10 bit，即支持最大每秒 102.4 万个 ID 生成 (比 snowflake 的计数序列号少 2 bit)
 
     基于 springboot 代码使用示例：
 
@@ -76,6 +78,7 @@
         @Bean
         public RevisionProperties revisionProperties() {
             RevisionProperties properties = RevisionProperties.buildDefault();
+            properties.setNamespace("my-cluster-name.my-service-name");
             properties.setTimeToLive(Duration.ofMinutes(10));
             properties.setRemainingTimeToDelay(Duration.ofSeconds(30));
             properties.setThreshold(80);
@@ -90,18 +93,20 @@
 
         // 创建ID生成器
         @Bean
-        public RevisionIdGenerator revisionIdGenerator(RevisionRepository repository, RevisionProperties properties) {
+        public IdGenerator revisionIdGenerator(RevisionRepository repository, RevisionProperties properties) {
             return new AutoDelayRevisionIdGeneratorFactory(repository).create(properties);
         }
 
         // 注入ID生成器
         @Autowired
-        private RevisionIdGenerator revisionIdGenerator;
+        private IdGenerator revisionIdGenerator;
 
         // 生成全局唯一 ID
         long id = idGenerator.generate();
 
     生成器配置：
+
+        namespace              同个数据源的情况下，根据业务命名空间进行区分，不同命名空间互不影响
 
         epochDate              系统上线时间，一旦指定不可变动
 
@@ -109,17 +114,19 @@
 
         remainingTimeToDelay   剩余多少时长触发延时，根据 timeToLive 合理配置，在超时之前留有足够的时候去执行延时逻辑
 
-    生成器延时调度逻辑：
+    生成器实现逻辑：
 
         1，应用启动获取一个可用的 workerId  及其 可用时间范围，实例化作为 当前 ID 生成器
 
         2，应用启动异步调度任务，对当前的 ID 生成器剩余可用时长进行检测，判断是否进行延时
 
-        3，调用方法生成 ID，如果 ID 等于 -1，表示生成器已经失效，触发同步获取另一个可用的 workId 及其 可用时间范围，实例化作为当前 ID 生成器
+        3，当前生成器不在可用时间范围内，或时钟回拨超过三次，切换备用生成器为当前生成器
 
-        4，步骤 2/3 是各自执行的，通过锁进行并发控制，直到应用停止为止
+        4，备用生成器切换失败，直接同步加载并生成当前生成器
 
     存储接口实现：
+
+        org.lushen.mrh.id.generator.revision.RevisionRepository                       接口声明，可扩展其他存储实现
 
         org.lushen.mrh.id.generator.revision.achieve.RevisionMemoryRepository         基于内存存储(仅测试使用)
 
@@ -127,10 +134,7 @@
 
         org.lushen.mrh.id.generator.revision.achieve.RevisionRedisRepository          基于redis存储(存在风险)
 
-        org.lushen.mrh.id.generator.revision.achieve.RevisionZookeeperRepository      基于zookeeper存储(存在风险)
-
-    存储接口使用 mysql 需要建数据库表：
-
+        # 使用 mysql 需要建数据库表：
         CREATE TABLE `revision_alloc` (
             `worker_id` int(4) NOT NULL COMMENT '工作节点ID',
             `namespace` varchar(100) NOT NULL COMMENT '业务命名空间',
@@ -140,78 +144,60 @@
             PRIMARY KEY (`worker_id`,`namespace`)
         ) ENGINE=InnoDB COMMENT='revisionid 生成器信息存储表';
 
-    存储接口扩展：
-
-        org.lushen.mrh.id.generator.revision.RevisionRepository                      实现此接口，并提供 业务命名空间 功能
-
-    业务命名空间，例如有两个业务不同的服务 service-A、service-B，创建存储接口：
-
-        // 各自拥有 1024 个 workerId，互相之间不影响
-
-        // service-A
-        @Bean
-        public RevisionRepository revisionRepository(DataSource dataSource) {
-            return new RevisionMysqlJdbcRepository("service-A", dataSource);
-        }
-
-        // service-B
-        @Bean
-        public RevisionRepository revisionRepository(DataSource dataSource) {
-            return new RevisionMysqlJdbcRepository("service-B", dataSource);
-        }
-
 ## segment
 
     号段 ID 生成器，借鉴了美团 Leaf ID 生成器
 
     基于 springboot 使用示例：
 
-        // 创建号段配置
+        // 创建号段配置，命名空间建议使用 clusterName.serviceName 的方式进行命名
         @Bean
         public SegmentProperties segmentProperties() {
             SegmentProperties properties = SegmentProperties.buildDefault();
+            properties.setNamespace("mrh-cluster.service-test")
             properties.setRange(1000);
             properties.setRemaining(200);
             return properties;
         }
 
-        // 创建号段分配中间件接口，并指定号段命名空间
+        // 创建号段存储中间件接口
         @Bean
         public SegmentRepository segmentRepository(DataSource dataSource) {
-            return new SegmentMysqlJdbcRepository("mytest", dataSource);
+            return new SegmentMysqlJdbcRepository(dataSource);
         }
 
         // 号段ID生成器
         @Bean
-        public SegmentIdGenerator segmentIdGenerator(SegmentRepository repository, SegmentProperties properties) {
+        public IdGenerator segmentIdGenerator(SegmentRepository repository, SegmentProperties properties) {
             return new DefaultSegmentIdGeneratorFactory(repository).create(properties);
         }
 
         // 注入号段ID生成器
         @Autowired
-        private SegmentIdGenerator idGenerator;
+        private IdGenerator idGenerator;
 
         // 生成全局唯一 ID
         long id = idGenerator.generate();
 
     号段配置：
 
-        range           每次拉取多少号段到内存中，根据并发进行，频繁重启会导致未使用号段被浪费，范围 (0, N)
+        namespace       同个数据源的情况下，根据业务命名空间进行区分，不同命名空间互不影响
 
-        remaining       号段剩余多少，进行备用预加载，范围 (0, range)，如果来不及预加载，ID 生成时会进行直接加载
+        range           每次拉取多少号段到内存中，根据并发合理配置，频繁重启会导致未使用号段被浪费，范围 (0, N)
+
+        remaining       号段剩余多少，进行备用预加载，范围 (0, range)
 
     号段分配中间件，已存在接口实现：
 
+        org.lushen.mrh.id.generator.segment.SegmentRepository                     接口声明，实现类各自定义存储实现
+
         org.lushen.mrh.id.generator.segment.achieve.SegmentMemoryRepository       基于内存进行分配(仅测试使用)
 
-        org.lushen.mrh.id.generator.segment.achieve.SegmentMysqlJdbcRepository    基于mysql数据库进行分配(建议使用)
+        org.lushen.mrh.id.generator.segment.achieve.SegmentMysqlJdbcRepository    基于mysql数据库进行分配
 
         org.lushen.mrh.id.generator.segment.achieve.SegmentRedisRepository        基于redis进行分配(存在风险)
 
-        org.lushen.mrh.id.generator.segment.achieve.SegmentZookeeperRepository    基于zookeeper进行分配(存在风险)
-
-    号段分配中间件，mysql 需要创建数据库表：
-
+        # 使用 mysql 需要创建数据库表
         CREATE TABLE `segment_alloc` (
             `namespace` varchar(100) NOT NULL COMMENT '命名空间',
             `max_value` bigint(19) NOT NULL COMMENT '最大已使用ID',
@@ -220,7 +206,3 @@
             `version` bigint(19) NOT NULL COMMENT '版本号',
             PRIMARY KEY (`namespace`)
         ) ENGINE=InnoDB COMMENT='号段 ID 生成器信息存储表';
-
-    号段分配中间件，接口扩展：
-
-        实现接口 org.lushen.mrh.id.generator.segment.SegmentRepository            实现此接口，提供 号段命名空间 功能

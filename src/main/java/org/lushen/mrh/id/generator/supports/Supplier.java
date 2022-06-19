@@ -1,4 +1,4 @@
-package org.lushen.mrh.id.generator.supports.function;
+package org.lushen.mrh.id.generator.supports;
 
 /**
  * 自定义 supplier 允许抛出异常

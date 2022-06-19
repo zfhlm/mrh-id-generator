@@ -1,94 +1,100 @@
 package org.lushen.mrh.id.generator.revision.achieve;
 
-import static org.lushen.mrh.id.generator.revision.achieve.DefaultRevisionIdGenerator.maxWorkerId;
+import static org.lushen.mrh.id.generator.revision.RevisionIdGenerator.InnerRevisionIdGenerator.maxWorkerId;
 
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.IntStream;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.lushen.mrh.id.generator.revision.RevisionNode;
+import org.lushen.mrh.id.generator.revision.RevisionException;
+import org.lushen.mrh.id.generator.revision.RevisionException.RevisionMatchFailureException;
 import org.lushen.mrh.id.generator.revision.RevisionRepository;
-import org.lushen.mrh.id.generator.supports.NamespaceSupport;
+import org.lushen.mrh.id.generator.revision.RevisionTarget;
+import org.lushen.mrh.id.generator.revision.RevisionTarget.RevisionAvailable;
 
 /**
  * revision 持久化接口 memory 实现，使用 synchronized 方法锁进行并发控制，测试使用
  * 
  * @author hlm
  */
-public class RevisionMemoryRepository extends NamespaceSupport implements RevisionRepository {
+public class RevisionMemoryRepository implements RevisionRepository {
 
-	private static final ConcurrentHashMap<String, RevisionNode[]> nodeGroups = new ConcurrentHashMap<String, RevisionNode[]>();
+	private final ConcurrentHashMap<String, RevisionTarget[]> nodeGroups = new ConcurrentHashMap<String, RevisionTarget[]>();
 
 	private final Log log = LogFactory.getLog(RevisionMemoryRepository.class.getSimpleName());
 
 	public RevisionMemoryRepository() {
-		this(null);
-	}
-
-	public RevisionMemoryRepository(String namespace) {
-		super(namespace);
-	}
-
-	private RevisionNode[] nodes() {
-		return nodeGroups.computeIfAbsent(this.namespace, e -> new RevisionNode[(int)maxWorkerId+1]);
+		super();
 	}
 
 	@Override
-	public synchronized RevisionNode next(long begin, Duration timeToLive) {
+	public synchronized RevisionAvailable attempt(String namespace, Duration timeToLive) throws RevisionException {
 
-		RevisionNode[] nodes = nodes();
+		RevisionTarget[] nodes = nodeGroups.computeIfAbsent(namespace, e -> new RevisionTarget[(int)maxWorkerId+1]);
+		long beginAt = System.currentTimeMillis();
 
-		return Arrays.stream(nodes).filter(Objects::nonNull).filter(e -> e.getExpired() < begin).findFirst().map(expiredNode -> {
+		// 尝试获取一个到期节点
+		RevisionTarget expiredNode = Arrays.stream(nodes).filter(Objects::nonNull).filter(e -> e.getExpiredAt() < beginAt).findFirst().orElse(null);
+		if(expiredNode != null) {
 
-			// 更新节点
-			RevisionNode node = new RevisionNode(expiredNode.getWorkerId(), begin+timeToLive.toMillis());
+			RevisionTarget node = new RevisionTarget(expiredNode.getWorkerId(), beginAt+timeToLive.toMillis());
 			nodes[node.getWorkerId()] = node;
 
+			// 更新节点信息
 			if(log.isInfoEnabled()) {
 				log.info("Update node " + node);
 			}
 
-			return node;
+			return new RevisionAvailable(node.getWorkerId(), beginAt, node.getExpiredAt());
+		}
 
-		}).orElse(IntStream.range(0, nodes.length).boxed().filter(e -> nodes[e] == null).findFirst().map(workerId -> {
+		// 尝试获取一个从未使用的节点
+		Integer workerId = IntStream.range(0, nodes.length).boxed().filter(e -> nodes[e] == null).findFirst().orElse(null);
+		if(workerId != null) {
 
-			// 添加节点
-			RevisionNode node = new RevisionNode(workerId, begin+timeToLive.toMillis());
+			// 添加节点信息
+			RevisionTarget node = new RevisionTarget(workerId, beginAt+timeToLive.toMillis());
 			nodes[workerId] = node;
 
 			if(log.isInfoEnabled()) {
 				log.info("Add node " + node);
 			}
 
-			return node;
+			return new RevisionAvailable(node.getWorkerId(), beginAt, node.getExpiredAt());
+		}
 
-		}).orElseThrow(() -> new RuntimeException("No workId available")));
-
+		// 无任何可用节点
+		throw new RevisionException("No workId available");
 	}
 
 	@Override
-	public synchronized RevisionNode delay(int workerId, long expired, Duration timeToLive) {
+	public synchronized RevisionAvailable attempt(String namespace, Duration timeToLive, RevisionTarget target) throws RevisionException, RevisionMatchFailureException {
 
-		RevisionNode[] nodes = nodes();
+		RevisionTarget[] nodes = nodeGroups.computeIfAbsent(namespace, e -> new RevisionTarget[(int)maxWorkerId+1]);
 
-		return Optional.ofNullable(nodes[workerId]).filter(node -> node.getExpired()==expired).map(passNode -> {
+		// 尝试获取目标节点
+		int workerId = target.getWorkerId();
+		long expiredAt = target.getExpiredAt();
+		RevisionTarget node = nodes[workerId];
 
-			// 更新节点
-			RevisionNode newNode = new RevisionNode(workerId, expired+timeToLive.toMillis());
+		// 更新节点信息
+		if(node != null && node.getExpiredAt()==expiredAt) {
+
+			RevisionTarget newNode = new RevisionTarget(workerId, expiredAt+timeToLive.toMillis());
 			nodes[workerId] = newNode;
 
 			if(log.isInfoEnabled()) {
-				log.info("Delay node " + newNode);
+				log.info("Update target node " + newNode);
 			}
 
-			return newNode;
+			return new RevisionAvailable(workerId, expiredAt+1, newNode.getExpiredAt());
+		}
 
-		}).orElseThrow(() -> new RuntimeException(String.format("Failed to delay node [%s] with expired [%s] !", workerId, expired)));
+		throw new RevisionMatchFailureException(target.toString());
 
 	}
 

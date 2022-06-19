@@ -2,10 +2,10 @@ package org.lushen.mrh.id.generator.revision.redis;
 
 import java.time.Duration;
 
-import org.lushen.mrh.id.generator.revision.RevisionIdGenerator;
+import org.lushen.mrh.id.generator.IdGenerator;
+import org.lushen.mrh.id.generator.revision.RevisionIdGeneratorFactory;
 import org.lushen.mrh.id.generator.revision.RevisionProperties;
 import org.lushen.mrh.id.generator.revision.RevisionRepository;
-import org.lushen.mrh.id.generator.revision.achieve.AutoDelayRevisionIdGeneratorFactory;
 import org.lushen.mrh.id.generator.revision.achieve.RevisionRedisRepository;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 
@@ -26,7 +26,7 @@ public class TestConcurrent {
 		for(int index=0; index<30; index++) {
 
 			new Thread(() -> {
-				RevisionIdGenerator idGenerator = new AutoDelayRevisionIdGeneratorFactory(repository).create(properties);
+				IdGenerator idGenerator = new RevisionIdGeneratorFactory(repository).create(properties);
 				for(int i=0; i<30000; i++) {
 					try {
 						Thread.sleep(1000L);
