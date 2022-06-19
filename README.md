@@ -81,14 +81,14 @@
             properties.setNamespace("my-cluster-name.my-service-name");
             properties.setTimeToLive(Duration.ofMinutes(10));
             properties.setRemainingTimeToDelay(Duration.ofSeconds(30));
-            properties.setThreshold(80);
+            properties.setEpochDate(LocalDate.parse("2021-01-01", DateTimeFormatter.ofPattern("yyyy-MM-dd")));
             return properties;
         }
 
-        // 创建生成器存储中间件接口，指定业务命名空间为 myservice-name
+        // 创建生成器存储中间件接口
         @Bean
         public RevisionRepository revisionRepository(DataSource dataSource) {
-            return new RevisionMysqlJdbcRepository("myservice-name", dataSource);
+            return new RevisionMysqlJdbcRepository(dataSource);
         }
 
         // 创建ID生成器
