@@ -1,5 +1,7 @@
 package org.lushen.mrh.id.generator.revision;
 
+import static org.lushen.mrh.id.generator.revision.RevisionIdGenerator.ActualRevisionIdGenerator.expiredFlagSequence;
+
 import java.time.ZoneOffset;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -8,8 +10,6 @@ import java.util.concurrent.TimeUnit;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.lushen.mrh.id.generator.IdGenerator;
-import org.lushen.mrh.id.generator.revision.RevisionException.RevisionMatchFailureException;
-import org.lushen.mrh.id.generator.revision.RevisionTarget.RevisionAvailable;
 
 /**
  * revision ID 生成器，基于 snowflake 的变种生成器，指定可用时段，并实现以下结构：
@@ -32,11 +32,11 @@ public class RevisionIdGenerator extends RevisionProperties implements IdGenerat
 		Thread thread = new Thread(r);
 		thread.setDaemon(true);
 		return thread;
-	});													// 线程池
+	});													// daemon线程池
 
-	private InnerRevisionIdGenerator curr;				// 当前 ID 生成器
+	private ActualRevisionIdGenerator curr;				// 当前 ID 生成器
 
-	private InnerRevisionIdGenerator back;				// 备用 ID 生成器
+	private ActualRevisionIdGenerator back;				// 备用 ID 生成器
 
 	RevisionIdGenerator(RevisionRepository repository) {
 		super();
@@ -52,52 +52,52 @@ public class RevisionIdGenerator extends RevisionProperties implements IdGenerat
 			return id;
 		}
 
-		// 当前生成器不在有效时间内，或时钟回退次数超过三次
+		// 生成器不可用
 		synchronized (this.executor) {
 
-			// 存在备用生成器，直接切换
-			if(this.back != null) {
+			// 生成器已过期，且存在备用生成器，直接切换
+			if(id == expiredFlagSequence && this.back != null) {
 				this.curr = this.back;
 				this.back = null;
 			}
-			// 不存在备用生成器，直接同步生成
+			// 其他异常情况，同步创建生成器
 			else {
-				RevisionAvailable available = this.repository.attempt(this.namespace, this.timeToLive);
 				long epochAt = this.epochDate.atStartOfDay(ZoneOffset.ofHours(8)).toInstant().toEpochMilli();
-				this.curr = new InnerRevisionIdGenerator(epochAt, available.getWorkerId(), available.getBeginAt(), available.getExpiredAt());
+				RevisionWorker worker = this.repository.obtain(this.namespace, System.currentTimeMillis(), this.timeToLive);
+				this.curr = new ActualRevisionIdGenerator(epochAt, worker.getWorkerId(), worker.getBeginAt(), worker.getExpiredAt());
+				this.back = null;
 			}
 
-		}
+			// 重新生成ID
+			id = this.curr.generate();
+			if(id >= 0L) {
+				return id;
+			}
 
-		return generate();
+			// 再次生成的 ID 不正常，直接抛出异常
+			throw new RevisionException("Generate ID error");
+
+		}
 
 	}
 
 	public void initialize() {
-		
-		long epochAt = this.epochDate.atStartOfDay(ZoneOffset.ofHours(8)).toInstant().toEpochMilli();
 
 		// 初始化 ID 生成器
 		if(this.curr == null) {
-			RevisionAvailable available = this.repository.attempt(this.namespace, this.timeToLive);
-			this.curr = new InnerRevisionIdGenerator(epochAt, available.getWorkerId(), available.getBeginAt(), available.getExpiredAt());
+			long epochAt = this.epochDate.atStartOfDay(ZoneOffset.ofHours(8)).toInstant().toEpochMilli();
+			RevisionWorker worker = this.repository.obtain(this.namespace, System.currentTimeMillis(), this.timeToLive);
+			this.curr = new ActualRevisionIdGenerator(epochAt, worker.getWorkerId(), worker.getBeginAt(), worker.getExpiredAt());
 		}
 
-		// 启动调度任务
+		// 启动调度任务，当前生成器剩余可用时长到达阈值，创建备用生成器
 		schedule(() -> {
 			synchronized (this.executor) {
-				// 备用生成器不存在，且当前生成器剩余时长到达阈值
 				if(this.back == null && this.curr.getExpiredAt() - System.currentTimeMillis() <= this.remainingTimeToDelay.toMillis()) {
 					try {
-						// 获取当前生成器下一段有效时间使用权
-						RevisionTarget target = new RevisionTarget(this.curr.getWorkerId(), this.curr.getExpiredAt());
-						RevisionAvailable available = this.repository.attempt(this.namespace, this.timeToLive, target);
-						this.back = new InnerRevisionIdGenerator(epochAt, available.getWorkerId(), available.getBeginAt(), available.getExpiredAt());
-					} catch (RevisionMatchFailureException e) {
-						// 当前生成器下一段有效时间已被抢占，获取其他workerId生成器作为备用
-						log.warn(e.getMessage(), e);
-						RevisionAvailable available = this.repository.attempt(this.namespace, this.timeToLive);
-						this.back = new InnerRevisionIdGenerator(epochAt, available.getWorkerId(), available.getBeginAt(), available.getExpiredAt());
+						long epochAt = this.epochDate.atStartOfDay(ZoneOffset.ofHours(8)).toInstant().toEpochMilli();
+						RevisionWorker worker = this.repository.obtain(this.namespace, this.curr.getExpiredAt()+1L, this.timeToLive, this.curr.getWorkerId());
+						this.back = new ActualRevisionIdGenerator(epochAt, worker.getWorkerId(), worker.getBeginAt(), worker.getExpiredAt());
 					} catch (Exception e) {
 						log.error(e.getMessage(), e);
 					}
@@ -106,7 +106,7 @@ public class RevisionIdGenerator extends RevisionProperties implements IdGenerat
 		});
 
 	}
-	
+
 	private void schedule(Runnable command) {
 		this.executor.execute(() -> {
 			try {
@@ -122,11 +122,17 @@ public class RevisionIdGenerator extends RevisionProperties implements IdGenerat
 	}
 
 	/**
-	 * revision ID 生成算法实现
+	 * revision ID 生成器实现
 	 * 
 	 * @author hlm
 	 */
-	public static class InnerRevisionIdGenerator implements IdGenerator {
+	public static class ActualRevisionIdGenerator implements IdGenerator {
+
+		// 生成器不可用标识序列
+		public static final long unavailableFlagSequence = -1L;
+
+		// 生成器已过期标识序列
+		public static final long expiredFlagSequence = -2L;
 
 		// 计数序列号 bit 位数
 		private static final long sequenceBits = 10L;
@@ -177,7 +183,7 @@ public class RevisionIdGenerator extends RevisionProperties implements IdGenerat
 		 * @param beginAt		可用开始时间戳
 		 * @param expiredAt		可用过期时间戳
 		 */
-		public InnerRevisionIdGenerator(long epochAt, int workerId, long beginAt, long expiredAt) {
+		public ActualRevisionIdGenerator(long epochAt, int workerId, long beginAt, long expiredAt) {
 			super();
 			if(epochAt <= 0) {
 				throw new IllegalArgumentException("epochAt can't be less than or equal to 0");
@@ -198,22 +204,27 @@ public class RevisionIdGenerator extends RevisionProperties implements IdGenerat
 		/**
 		 * 生成唯一序列 ID
 		 * 
-		 * @return 不在可用时间范围内返回-1L，时钟回拨达到最大次数返回-2L
+		 * @return 生成返回 [0, ∞)，失败返回 {{@link beforeBeginAtFlagSequence}, {@link afterExpiredFlagSequence}, {@link maxMoveBackFlagSequence}}
 		 */
 		@Override
 		public synchronized long generate() {
 
 			long timestamp = timeGen();
 
-			// 不在可用时间范围内，返回 -1 由外部自行处理
-			if(timestamp < beginAt || timestamp > expiredAt) {
-				return -1L;
+			// 当前时间在可用时间之前，返回不可用标识序列
+			if(timestamp < beginAt) {
+				return unavailableFlagSequence;
 			}
 
-			// 发生时钟回拨，滚动次数加 1，如果达到最大次数，返回 -2 由外部自行处理
+			// 当前时间在可用时间之后，返回已过期标识序列
+			if(timestamp > expiredAt) {
+				return expiredFlagSequence;
+			}
+
+			// 发生时钟回拨，滚动次数加 1，如果达到最大次数，返回不可用标识序列
 			if (timestamp < lastTimestamp) {
 				if(moveBack == maxMoveBack) {
-					return -2L;
+					return unavailableFlagSequence;
 				} else {
 					moveBack += 1;
 				}

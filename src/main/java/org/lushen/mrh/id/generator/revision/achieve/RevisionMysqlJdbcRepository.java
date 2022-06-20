@@ -1,9 +1,13 @@
 package org.lushen.mrh.id.generator.revision.achieve;
 
-import static org.lushen.mrh.id.generator.revision.RevisionIdGenerator.InnerRevisionIdGenerator.maxWorkerId;
+import static org.lushen.mrh.id.generator.revision.RevisionIdGenerator.ActualRevisionIdGenerator.maxWorkerId;
 
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Date;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -13,11 +17,10 @@ import javax.sql.DataSource;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.lushen.mrh.id.generator.revision.RevisionEntity;
 import org.lushen.mrh.id.generator.revision.RevisionException;
-import org.lushen.mrh.id.generator.revision.RevisionException.RevisionMatchFailureException;
 import org.lushen.mrh.id.generator.revision.RevisionRepository;
-import org.lushen.mrh.id.generator.revision.RevisionTarget;
-import org.lushen.mrh.id.generator.revision.RevisionTarget.RevisionAvailable;
+import org.lushen.mrh.id.generator.revision.RevisionWorker;
 import org.lushen.mrh.id.generator.supports.JdbcExecutor;
 
 /**
@@ -40,92 +43,102 @@ public class RevisionMysqlJdbcRepository implements RevisionRepository {
 	}
 
 	@Override
-	public RevisionAvailable attempt(String namespace, Duration timeToLive) throws RevisionException {
+	public RevisionWorker obtain(String namespace, long macthingAt, Duration timeToLive, int... workerIds) {
 
 		return JdbcExecutor.executeWithTransaction(() -> dataSource.getConnection(), conn -> conn.close(), conn -> {
 
 			// 查询所有工作节点
 			String queryForUpdate = "select * from revision_alloc where namespace=? order by worker_id asc for update";
-			List<RevisionTarget> nodes = JdbcExecutor.executeQuery(conn, queryForUpdate, (rs -> {
-				return new RevisionTarget(rs.getInt("worker_id"), rs.getLong("expired"));
+			List<RevisionEntity> entities = JdbcExecutor.executeQuery(conn, queryForUpdate, (rs -> {
+				RevisionEntity entity = new RevisionEntity();
+				entity.setNamespace(rs.getString("namespace"));
+				entity.setWorkerId(rs.getInt("worker_id"));
+				entity.setLastTimestamp(rs.getLong("last_timestamp"));
+				entity.setCreateTime(rs.getDate("create_time"));
+				entity.setModifyTime(rs.getDate("modify_time"));
+				return entity;
 			}), namespace);
 
-			long beginAt = System.currentTimeMillis();
-			
-			// 获取到期节点
-			RevisionTarget expiredNode = nodes.stream().filter(e -> e.getExpiredAt() < beginAt).findFirst().orElse(null);
+			// 获取可用节点，排序将期望节点排在前面
+			Set<Integer> workerIdSet = (workerIds == null ? Collections.emptySet() : Arrays.stream(workerIds).boxed().collect(Collectors.toSet()));
+			RevisionEntity availableEntity = entities.stream()
+					.filter(Objects::nonNull)
+					.filter(e -> e.getLastTimestamp() < macthingAt)
+					.sorted((prev, next) -> {
+						if(workerIdSet.contains(prev.getWorkerId())) {
+							return -1;
+						}
+						if(workerIdSet.contains(next.getWorkerId())) {
+							return 1;
+						}
+						return 0;
+					})
+					.findFirst()
+					.orElse(null);
 
-			if(expiredNode != null) {
+			// 存在可用节点
+			if(availableEntity != null) {
 
-				//更新过期节点
-				RevisionTarget node = new RevisionTarget(expiredNode.getWorkerId(), beginAt+timeToLive.toMillis());
-				String update = "update `revision_alloc` set expired=?, modify_time=now() where worker_id=? and namespace=?";
-				JdbcExecutor.executeUpdate(conn, update, node.getExpiredAt(), node.getWorkerId(), namespace);
+				//更新可用节点
+				RevisionEntity entity = new RevisionEntity();
+				entity.setNamespace(availableEntity.getNamespace());
+				entity.setWorkerId(availableEntity.getWorkerId());
+				entity.setLastTimestamp(macthingAt + timeToLive.toMillis());
+				entity.setCreateTime(availableEntity.getCreateTime());
+				entity.setModifyTime(new Date());
+				String update = "update `revision_alloc` set last_timestamp=?, modify_time=now() where worker_id=? and namespace=?";
+				JdbcExecutor.executeUpdate(conn, update, entity.getLastTimestamp(), entity.getWorkerId(), namespace);
 
 				if(log.isInfoEnabled()) {
-					log.info("Update node " + node);
+					log.info("Update worker " + entity);
 				}
 
-				return Optional.of(new RevisionAvailable(node.getWorkerId(), beginAt, node.getExpiredAt()));
+				// 返回节点信息
+				RevisionWorker worker = new RevisionWorker();
+				worker.setNamespace(entity.getNamespace());
+				worker.setWorkerId(entity.getWorkerId());
+				worker.setBeginAt(macthingAt);
+				worker.setExpiredAt(entity.getLastTimestamp());
+
+				return Optional.of(worker);
 
 			}
 
-			// 获取未使用的节点
-			Set<Integer> workerIds = nodes.stream().map(e -> e.getWorkerId()).collect(Collectors.toSet());
-			int workerId = IntStream.range(0, (int)(maxWorkerId+1)).filter(e -> ! workerIds.contains(e) ).findFirst().orElse(-1);
+			// 查询未被实例化的 workerId
+			Set<Integer> allWorkerIds = entities.stream().map(e -> e.getWorkerId()).collect(Collectors.toSet());
+			int workerId = IntStream.range(0, (int)(maxWorkerId+1)).filter(e -> ! allWorkerIds.contains(e) ).findFirst().orElse(-1);
 
+			// 存在未被实例化的 workerId
 			if(workerId != -1) {
 
 				// 新增节点
-				RevisionTarget node = new RevisionTarget(workerId, beginAt+timeToLive.toMillis());
-				String insert = "insert into `revision_alloc`(worker_id, namespace, expired, create_time, modify_time) values (?, ?, ?, now(), now())";
-				JdbcExecutor.executeUpdate(conn, insert, node.getWorkerId(), namespace, node.getExpiredAt());
+				RevisionEntity entity = new RevisionEntity();
+				entity.setNamespace(namespace);
+				entity.setWorkerId(workerId);
+				entity.setLastTimestamp(macthingAt + timeToLive.toMillis());
+				entity.setCreateTime(new Date());
+				entity.setModifyTime(new Date());
+				String insert = "insert into `revision_alloc`(worker_id, namespace, last_timestamp, create_time, modify_time) values (?, ?, ?, now(), now())";
+				JdbcExecutor.executeUpdate(conn, insert, entity.getWorkerId(), namespace, entity.getLastTimestamp());
 
 				if(log.isInfoEnabled()) {
-					log.info("Add node " + node);
+					log.info("Add worker " + entity);
 				}
 
-				return Optional.of(new RevisionAvailable(node.getWorkerId(), beginAt, node.getExpiredAt()));
+				// 返回节点信息
+				RevisionWorker worker = new RevisionWorker();
+				worker.setNamespace(entity.getNamespace());
+				worker.setWorkerId(entity.getWorkerId());
+				worker.setBeginAt(macthingAt);
+				worker.setExpiredAt(entity.getLastTimestamp());
+
+				return Optional.of(worker);
 
 			}
 
-			return Optional.<RevisionAvailable>empty();
+			return Optional.<RevisionWorker>empty();
 
-		}).orElseThrow(() -> new RevisionException("No workId available"));
-
-	}
-
-	@Override
-	public RevisionAvailable attempt(String namespace, Duration timeToLive, RevisionTarget target) throws RevisionException, RevisionMatchFailureException {
-
-		return JdbcExecutor.executeWithTransaction(() -> dataSource.getConnection(), conn -> conn.close(), conn -> {
-
-			int workerId = target.getWorkerId();
-			long expiredAt = target.getExpiredAt();
-
-			// 查询节点数据
-			String selectForUpdate = "select * from `revision_alloc` where worker_id=? and namespace=? for update";
-			RevisionTarget passNode = JdbcExecutor.executeQueryFirst(conn, selectForUpdate, (rs -> {
-				return new RevisionTarget(rs.getInt("worker_id"), rs.getLong("expired"));
-			}), workerId, namespace);
-
-			// 过期时间不匹配(已被占用)
-			if(passNode == null || passNode.getExpiredAt() != expiredAt) {
-				return Optional.<RevisionAvailable>empty();
-			}
-
-			// 更新节点数据
-			RevisionTarget newNode = new RevisionTarget(workerId, expiredAt+timeToLive.toMillis());
-			String update = "update `revision_alloc` set expired=?, modify_time=now() where worker_id=? and namespace=?";
-			JdbcExecutor.executeUpdate(conn, update, newNode.getExpiredAt(), newNode.getWorkerId(), namespace);
-
-			if(log.isInfoEnabled()) {
-				log.info("Update target node " + newNode);
-			}
-
-			return Optional.of(new RevisionAvailable(workerId, expiredAt+1, newNode.getExpiredAt()));
-
-		}).orElseThrow(() -> new RevisionMatchFailureException(target.toString()));
+		}).orElseThrow(() -> new RevisionException("No worker available"));
 
 	}
 

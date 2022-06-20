@@ -17,23 +17,4 @@ public class RevisionException extends RuntimeException {
 		super(message);
 	}
 
-	/**
-	 * revision 获取不匹配异常
-	 * 
-	 * @author hlm
-	 */
-	public static class RevisionMatchFailureException extends RevisionException {
-
-		private static final long serialVersionUID = 1137551352508265233L;
-
-		public RevisionMatchFailureException(String message, Throwable cause) {
-			super(message, cause);
-		}
-
-		public RevisionMatchFailureException(String message) {
-			super(message);
-		}
-
-	}
-
 }

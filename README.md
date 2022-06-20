@@ -94,7 +94,7 @@
         // 创建ID生成器
         @Bean
         public IdGenerator revisionIdGenerator(RevisionRepository repository, RevisionProperties properties) {
-            return new AutoDelayRevisionIdGeneratorFactory(repository).create(properties);
+            return new RevisionIdGeneratorFactory(repository).create(properties);
         }
 
         // 注入ID生成器
@@ -114,15 +114,15 @@
 
         remainingTimeToDelay   剩余多少时长触发延时，根据 timeToLive 合理配置，在超时之前留有足够的时候去执行延时逻辑
 
-    生成器实现逻辑：
+    生成器逻辑：
 
-        1，应用启动获取一个可用的 workerId  及其 可用时间范围，实例化作为 当前 ID 生成器
+        1，应用启动随机获取一个可用的 workerId  及其 可用时间范围，实例化作为 当前 ID 生成器
 
-        2，应用启动异步调度任务，对当前的 ID 生成器剩余可用时长进行检测，判断是否进行延时
+        2，应用启动异步调度任务，对当前的 ID 生成器剩余可用时长进行检测，判断是否实例化备用生成器
 
-        3，当前生成器不在可用时间范围内，或时钟回拨超过三次，切换备用生成器为当前生成器
+        3，生成器已过期，切换备用生成器为当前生成器
 
-        4，备用生成器切换失败，直接同步加载并生成当前生成器
+        4，生成器不可用，同步实例化当前生成器
 
     存储接口实现：
 
@@ -136,12 +136,12 @@
 
         # 使用 mysql 需要建数据库表：
         CREATE TABLE `revision_alloc` (
-            `worker_id` int(4) NOT NULL COMMENT '工作节点ID',
-            `namespace` varchar(100) NOT NULL COMMENT '业务命名空间',
-            `expired` bigint(19) NOT NULL COMMENT '最大过期时间戳(毫秒)',
-            `create_time` datetime NOT NULL COMMENT '创建时间',
-            `modify_time` datetime DEFAULT NULL COMMENT '更新时间'
-            PRIMARY KEY (`worker_id`,`namespace`)
+          `namespace` varchar(100) NOT NULL COMMENT '业务命名空间',
+          `worker_id` int(4) NOT NULL COMMENT '工作节点ID',
+          `last_timestamp` bigint(19) NOT NULL COMMENT '最后被使用的时间戳(毫秒)',
+          `create_time` datetime NOT NULL COMMENT '创建时间',
+          `modify_time` datetime DEFAULT NULL COMMENT '更新时间'
+          PRIMARY KEY (`worker_id`,`namespace`)
         ) ENGINE=InnoDB COMMENT='revisionid 生成器信息存储表';
 
 ## segment

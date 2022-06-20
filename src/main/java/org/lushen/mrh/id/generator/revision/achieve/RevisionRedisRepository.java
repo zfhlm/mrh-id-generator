@@ -1,34 +1,33 @@
 package org.lushen.mrh.id.generator.revision.achieve;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static org.lushen.mrh.id.generator.revision.RevisionIdGenerator.InnerRevisionIdGenerator.maxWorkerId;
+import static org.lushen.mrh.id.generator.revision.RevisionIdGenerator.ActualRevisionIdGenerator.maxWorkerId;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Date;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.Condition;
-import java.util.concurrent.locks.Lock;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.lushen.mrh.id.generator.revision.RevisionEntity;
 import org.lushen.mrh.id.generator.revision.RevisionException;
-import org.lushen.mrh.id.generator.revision.RevisionException.RevisionMatchFailureException;
 import org.lushen.mrh.id.generator.revision.RevisionRepository;
-import org.lushen.mrh.id.generator.revision.RevisionTarget;
-import org.lushen.mrh.id.generator.revision.RevisionTarget.RevisionAvailable;
+import org.lushen.mrh.id.generator.revision.RevisionWorker;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.RedisStringCommands.SetOption;
 import org.springframework.data.redis.core.types.Expiration;
+import org.springframework.data.redis.serializer.Jackson2JsonRedisSerializer;
 
 import com.google.common.primitives.Ints;
-import com.google.common.primitives.Longs;
 
 /**
  * revision 持久化接口 redis 实现，使用 redis setNX 全局锁进行并发控制
@@ -40,6 +39,8 @@ public class RevisionRedisRepository implements RevisionRepository {
 	private static final String LOCK = ".~lock";
 
 	private final Log log = LogFactory.getLog(RevisionRedisRepository.class.getSimpleName());
+
+	private final Jackson2JsonRedisSerializer<RevisionEntity> serializer = new Jackson2JsonRedisSerializer<>(RevisionEntity.class);
 
 	private final RedisConnectionFactory connectionFactory;
 
@@ -61,202 +62,125 @@ public class RevisionRedisRepository implements RevisionRepository {
 		this.lockTimeout = lockTimeout;
 	}
 
-	// 重写锁以及后续执行方法，只使用一个连接，用完一起释放
-
 	@Override
-	public RevisionAvailable attempt(String namespace, Duration timeToLive) throws RevisionException {
+	public RevisionWorker obtain(String namespace, long macthingAt, Duration timeToLive, int... workerIds) {
 
+		// 获取连接
 		RedisConnection connection = this.connectionFactory.getConnection();
+
+		// 全局锁 key value
+		byte[] lockKey = new StringBuilder(namespace).append(LOCK).toString().getBytes(StandardCharsets.UTF_8);
+		byte[] lockValue = UUID.randomUUID().toString().getBytes(StandardCharsets.UTF_8);
+
 		try {
 
-			String lockKey = new StringBuilder(namespace).append(LOCK).toString();
-			Lock lock = new RedisLock(connection, lockKey, this.lockTimeout);
-			lock.lock();
-
-			try {
-
-				long beginAt = System.currentTimeMillis();
-
-				// 查询所有节点
-				byte[] name = namespace.getBytes(UTF_8);
-				List<RevisionTarget> nodes = connection.hGetAll(name).entrySet().stream()
-						.map(entry -> new RevisionTarget(Ints.fromByteArray(entry.getKey()), Longs.fromByteArray(entry.getValue())))
-						.collect(Collectors.toList());
-
-				// 获取过期节点
-				RevisionTarget expiredNode = nodes.stream().filter(e -> e.getExpiredAt() < beginAt).findFirst().orElse(null);
-
-				if(expiredNode != null) {
-
-					//更新过期节点
-					RevisionTarget node = new RevisionTarget(expiredNode.getWorkerId(), beginAt+timeToLive.toMillis());
-					connection.hSet(name, Ints.toByteArray(node.getWorkerId()), Longs.toByteArray(node.getExpiredAt()));
-
-					if(log.isInfoEnabled()) {
-						log.info("Update node " + node);
-					}
-
-					return new RevisionAvailable(node.getWorkerId(), beginAt, node.getExpiredAt());
-
+			// 使用 setNX 加锁
+			for(;;) {
+				if(connection.set(lockKey, lockValue, Expiration.from(this.lockTimeout), SetOption.ifAbsent())) {
+					break;
 				}
-
-				// 获取一个未使用的节点
-				Set<Integer> workerIds = nodes.stream().map(e -> e.getWorkerId()).collect(Collectors.toSet());
-				int workerId = IntStream.range(0, (int)(maxWorkerId+1)).filter(e -> ! workerIds.contains(e) ).findFirst().orElse(-1);
-
-				if(workerId != -1) {
-
-					// 新增节点
-					RevisionTarget node = new RevisionTarget(workerId, beginAt+timeToLive.toMillis());
-					connection.hSet(name, Ints.toByteArray(node.getWorkerId()), Longs.toByteArray(node.getExpiredAt()));
-
-					if(log.isInfoEnabled()) {
-						log.info("Add node " + node);
-					}
-
-					return new RevisionAvailable(node.getWorkerId(), beginAt, node.getExpiredAt());
-
-				}
-
-				throw new RevisionException("No workId available");
-
-			} finally {
-
-				lock.unlock();
-
 			}
 
-		} finally {
+			// 查询所有节点
+			byte[] name = namespace.getBytes(UTF_8);
+			List<RevisionEntity> entities = connection.hGetAll(name).entrySet().stream()
+					.map(entry -> this.serializer.deserialize(entry.getValue()))
+					.collect(Collectors.toList());
 
-			connection.close();
+			// 获取可用节点，排序将期望节点排在前面
+			Set<Integer> workerIdSet = (workerIds == null ? Collections.emptySet() : Arrays.stream(workerIds).boxed().collect(Collectors.toSet()));
+			RevisionEntity availableEntity = entities.stream()
+					.filter(Objects::nonNull)
+					.filter(e -> e.getLastTimestamp() < macthingAt)
+					.sorted((prev, next) -> {
+						if(workerIdSet.contains(prev.getWorkerId())) {
+							return -1;
+						}
+						if(workerIdSet.contains(next.getWorkerId())) {
+							return 1;
+						}
+						return 0;
+					})
+					.findFirst()
+					.orElse(null);
 
-		}
+			// 存在可用节点
+			if(availableEntity != null) {
 
-	}
-
-	@Override
-	public RevisionAvailable attempt(String namespace, Duration timeToLive, RevisionTarget target) throws RevisionException, RevisionMatchFailureException {
-
-		RedisConnection connection = this.connectionFactory.getConnection();
-		try {
-
-			String lockKey = new StringBuilder(namespace).append(LOCK).toString();
-			Lock lock = new RedisLock(connection, lockKey, this.lockTimeout);
-			lock.lock();
-
-			try {
-
-				// 查询当前节点
-				int workerId = target.getWorkerId();
-				long expiredAt = target.getExpiredAt();
-				byte[] name = namespace.getBytes(UTF_8);
-				byte[] key = Ints.toByteArray(workerId);
-				byte[] value = connection.hGet(name, key);
-
-				if(value == null || Longs.fromByteArray(value) != expiredAt) {
-					throw new RevisionMatchFailureException(target.toString());
-				}
-
-				// 更新节点信息
-				RevisionTarget node = new RevisionTarget(workerId, expiredAt+timeToLive.toMillis());
-				connection.hSet(name, key, Longs.toByteArray(node.getExpiredAt()));
+				//更新可用节点
+				RevisionEntity entity = new RevisionEntity();
+				entity.setNamespace(availableEntity.getNamespace());
+				entity.setWorkerId(availableEntity.getWorkerId());
+				entity.setLastTimestamp(macthingAt + timeToLive.toMillis());
+				entity.setCreateTime(availableEntity.getCreateTime());
+				entity.setModifyTime(new Date());
+				connection.hSet(name, Ints.toByteArray(entity.getWorkerId()), this.serializer.serialize(entity));
 
 				if(log.isInfoEnabled()) {
-					log.info("Update target node " + node);
+					log.info("Update worker " + entity);
 				}
 
-				return new RevisionAvailable(workerId, expiredAt+1, node.getExpiredAt());
+				// 返回节点信息
+				RevisionWorker worker = new RevisionWorker();
+				worker.setNamespace(entity.getNamespace());
+				worker.setWorkerId(entity.getWorkerId());
+				worker.setBeginAt(macthingAt);
+				worker.setExpiredAt(entity.getLastTimestamp());
 
-			} finally {
-
-				lock.unlock();
+				return worker;
 
 			}
+
+			// 查询未被实例化的 workerId
+			Set<Integer> allWorkerIds = entities.stream().map(e -> e.getWorkerId()).collect(Collectors.toSet());
+			int workerId = IntStream.range(0, (int)(maxWorkerId+1)).filter(e -> ! allWorkerIds.contains(e) ).findFirst().orElse(-1);
+
+			// 存在未被实例化的 workerId
+			if(workerId != -1) {
+
+				// 新增节点
+				RevisionEntity entity = new RevisionEntity();
+				entity.setNamespace(namespace);
+				entity.setWorkerId(workerId);
+				entity.setLastTimestamp(macthingAt + timeToLive.toMillis());
+				entity.setCreateTime(new Date());
+				entity.setModifyTime(new Date());
+				connection.hSet(name, Ints.toByteArray(entity.getWorkerId()), this.serializer.serialize(entity));
+
+				if(log.isInfoEnabled()) {
+					log.info("Add worker " + entity);
+				}
+
+				// 返回节点信息
+				RevisionWorker worker = new RevisionWorker();
+				worker.setNamespace(entity.getNamespace());
+				worker.setWorkerId(entity.getWorkerId());
+				worker.setBeginAt(macthingAt);
+				worker.setExpiredAt(entity.getLastTimestamp());
+
+				return worker;
+
+			}
+
+			throw new RevisionException("No worker available");
 
 		} finally {
 
-			connection.close();
+			try {
 
-		}
-
-	}
-
-	/**
-	 * redis 分布式锁
-	 * 
-	 * @author hlm
-	 */
-	private static final class RedisLock implements Lock {
-
-		private final byte[] lockKey;						// 锁key
-
-		private final byte[] lockValue;						// 锁value
-
-		private final Duration lockTimeout;					// 锁超时时间(防死锁)
-
-		private final RedisConnection conn;					// 连接
-
-		public RedisLock(RedisConnection conn, String lockKey, Duration lockTimeout) {
-			super();
-			this.conn = conn;
-			this.lockKey = lockKey.getBytes(StandardCharsets.UTF_8);
-			this.lockValue = UUID.randomUUID().toString().getBytes(StandardCharsets.UTF_8);
-			this.lockTimeout = lockTimeout;
-		}
-
-		@Override
-		public void lock() {
-			for(;;) {
-				if(tryLock()) {
-					break;
+				// 移除锁
+				byte[] remoteValue = connection.get(lockKey);
+				if(remoteValue != null && Arrays.equals(lockValue, remoteValue)) {
+					connection.del(lockKey);
 				}
+
+			} finally {
+
+				// 释放连接
+				connection.close();
+
 			}
-		}
 
-		@Override
-		public void lockInterruptibly() throws InterruptedException {
-			for(;;) {
-				if (Thread.interrupted()) {
-					throw new InterruptedException();
-				}
-				if(tryLock()) {
-					break;
-				}
-			}
-		}
-
-		@Override
-		public boolean tryLock() {
-			return conn.set(this.lockKey, this.lockValue, Expiration.from(this.lockTimeout), SetOption.ifAbsent());
-		}
-
-		@Override
-		public boolean tryLock(long time, TimeUnit unit) throws InterruptedException {
-			long start = System.currentTimeMillis();
-			for(;;) {
-				if (Thread.interrupted()) {
-					throw new InterruptedException();
-				}
-				if(tryLock()) {
-					return true;
-				}
-				if(System.currentTimeMillis() - start > unit.toMillis(time)) {
-					return false;
-				}
-			}
-		}
-
-		@Override
-		public void unlock() {
-			byte[] remoteValue = conn.get(this.lockKey);
-			if(remoteValue != null && Arrays.equals(this.lockValue, remoteValue)) {
-				conn.del(this.lockKey);
-			}
-		}
-
-		@Override
-		public Condition newCondition() {
-			throw new RuntimeException("Not supported method !");
 		}
 
 	}

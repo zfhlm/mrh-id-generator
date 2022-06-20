@@ -17,8 +17,10 @@ public class TestSingle {
 		RevisionProperties properties = RevisionProperties.buildDefault();
 		properties.setTimeToLive(Duration.ofSeconds(10L));
 		properties.setRemainingTimeToDelay(Duration.ofSeconds(3));
-		IdGenerator idGenerator = new RevisionIdGeneratorFactory(repository).create(properties);
+		
+		repository.obtain(properties.getNamespace(), System.currentTimeMillis(), properties.getTimeToLive());
 
+		IdGenerator idGenerator = new RevisionIdGeneratorFactory(repository).create(properties);
 		for(int i=0; i<30000; i++) {
 			Thread.sleep(1000L);
 			System.out.println(idGenerator.generate());

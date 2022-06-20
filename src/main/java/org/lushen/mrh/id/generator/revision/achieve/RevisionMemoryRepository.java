@@ -1,20 +1,23 @@
 package org.lushen.mrh.id.generator.revision.achieve;
 
-import static org.lushen.mrh.id.generator.revision.RevisionIdGenerator.InnerRevisionIdGenerator.maxWorkerId;
+import static org.lushen.mrh.id.generator.revision.RevisionIdGenerator.ActualRevisionIdGenerator.maxWorkerId;
 
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Date;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.lushen.mrh.id.generator.revision.RevisionEntity;
 import org.lushen.mrh.id.generator.revision.RevisionException;
-import org.lushen.mrh.id.generator.revision.RevisionException.RevisionMatchFailureException;
 import org.lushen.mrh.id.generator.revision.RevisionRepository;
-import org.lushen.mrh.id.generator.revision.RevisionTarget;
-import org.lushen.mrh.id.generator.revision.RevisionTarget.RevisionAvailable;
+import org.lushen.mrh.id.generator.revision.RevisionWorker;
 
 /**
  * revision 持久化接口 memory 实现，使用 synchronized 方法锁进行并发控制，测试使用
@@ -23,7 +26,7 @@ import org.lushen.mrh.id.generator.revision.RevisionTarget.RevisionAvailable;
  */
 public class RevisionMemoryRepository implements RevisionRepository {
 
-	private final ConcurrentHashMap<String, RevisionTarget[]> nodeGroups = new ConcurrentHashMap<String, RevisionTarget[]>();
+	private final ConcurrentHashMap<String, RevisionEntity[]> nodeGroups = new ConcurrentHashMap<String, RevisionEntity[]>();
 
 	private final Log log = LogFactory.getLog(RevisionMemoryRepository.class.getSimpleName());
 
@@ -32,69 +35,91 @@ public class RevisionMemoryRepository implements RevisionRepository {
 	}
 
 	@Override
-	public synchronized RevisionAvailable attempt(String namespace, Duration timeToLive) throws RevisionException {
+	public synchronized RevisionWorker obtain(String namespace, long macthingAt, Duration timeToLive, int... workerIds) {
 
-		RevisionTarget[] nodes = nodeGroups.computeIfAbsent(namespace, e -> new RevisionTarget[(int)maxWorkerId+1]);
-		long beginAt = System.currentTimeMillis();
+		// 获取所有节点
+		RevisionEntity[] entities = nodeGroups.computeIfAbsent(namespace, e -> new RevisionEntity[(int)maxWorkerId+1]);
 
-		// 尝试获取一个到期节点
-		RevisionTarget expiredNode = Arrays.stream(nodes).filter(Objects::nonNull).filter(e -> e.getExpiredAt() < beginAt).findFirst().orElse(null);
-		if(expiredNode != null) {
+		// 获取可用节点，排序将期望节点排在前面
+		Set<Integer> workerIdSet = (workerIds == null ? Collections.emptySet() : Arrays.stream(workerIds).boxed().collect(Collectors.toSet()));
+		RevisionEntity availableEntity = Arrays.stream(entities)
+				.filter(Objects::nonNull)
+				.filter(e -> e.getLastTimestamp() < macthingAt)
+				.sorted((prev, next) -> {
+					if(workerIdSet.contains(prev.getWorkerId())) {
+						return -1;
+					}
+					if(workerIdSet.contains(next.getWorkerId())) {
+						return 1;
+					}
+					return 0;
+				})
+				.findFirst()
+				.orElse(null);
 
-			RevisionTarget node = new RevisionTarget(expiredNode.getWorkerId(), beginAt+timeToLive.toMillis());
-			nodes[node.getWorkerId()] = node;
+		// 存在可用节点
+		if(availableEntity != null) {
 
-			// 更新节点信息
+			// 更新可用节点
+			RevisionEntity entity = new RevisionEntity();
+			entity.setNamespace(availableEntity.getNamespace());
+			entity.setWorkerId(availableEntity.getWorkerId());
+			entity.setLastTimestamp(macthingAt + timeToLive.toMillis());
+			entity.setCreateTime(availableEntity.getCreateTime());
+			entity.setModifyTime(new Date());
+			entities[entity.getWorkerId()] = entity;
+
 			if(log.isInfoEnabled()) {
-				log.info("Update node " + node);
+				log.info("Update worker " + entity);
 			}
 
-			return new RevisionAvailable(node.getWorkerId(), beginAt, node.getExpiredAt());
+			// 返回节点信息
+			RevisionWorker worker = new RevisionWorker();
+			worker.setNamespace(entity.getNamespace());
+			worker.setWorkerId(entity.getWorkerId());
+			worker.setBeginAt(macthingAt);
+			worker.setExpiredAt(entity.getLastTimestamp());
+
+			return worker;
+
 		}
 
-		// 尝试获取一个从未使用的节点
-		Integer workerId = IntStream.range(0, nodes.length).boxed().filter(e -> nodes[e] == null).findFirst().orElse(null);
+		// 查询未被实例化的 workerId
+		Integer workerId = IntStream.range(0, entities.length)
+				.boxed()
+				.filter(e -> entities[e] == null)
+				.findFirst()
+				.orElse(null);
+
+		// 存在未被实例化的 workerId
 		if(workerId != null) {
 
 			// 添加节点信息
-			RevisionTarget node = new RevisionTarget(workerId, beginAt+timeToLive.toMillis());
-			nodes[workerId] = node;
+			RevisionEntity entity = new RevisionEntity();
+			entity.setNamespace(namespace);
+			entity.setWorkerId(workerId);
+			entity.setLastTimestamp(macthingAt + timeToLive.toMillis());
+			entity.setCreateTime(new Date());
+			entity.setModifyTime(new Date());
+			entities[workerId] = entity;
 
 			if(log.isInfoEnabled()) {
-				log.info("Add node " + node);
+				log.info("Add worker " + entity);
 			}
 
-			return new RevisionAvailable(node.getWorkerId(), beginAt, node.getExpiredAt());
+			// 返回节点信息
+			RevisionWorker worker = new RevisionWorker();
+			worker.setNamespace(entity.getNamespace());
+			worker.setWorkerId(entity.getWorkerId());
+			worker.setBeginAt(macthingAt);
+			worker.setExpiredAt(entity.getLastTimestamp());
+
+			return worker;
+
 		}
 
 		// 无任何可用节点
-		throw new RevisionException("No workId available");
-	}
-
-	@Override
-	public synchronized RevisionAvailable attempt(String namespace, Duration timeToLive, RevisionTarget target) throws RevisionException, RevisionMatchFailureException {
-
-		RevisionTarget[] nodes = nodeGroups.computeIfAbsent(namespace, e -> new RevisionTarget[(int)maxWorkerId+1]);
-
-		// 尝试获取目标节点
-		int workerId = target.getWorkerId();
-		long expiredAt = target.getExpiredAt();
-		RevisionTarget node = nodes[workerId];
-
-		// 更新节点信息
-		if(node != null && node.getExpiredAt()==expiredAt) {
-
-			RevisionTarget newNode = new RevisionTarget(workerId, expiredAt+timeToLive.toMillis());
-			nodes[workerId] = newNode;
-
-			if(log.isInfoEnabled()) {
-				log.info("Update target node " + newNode);
-			}
-
-			return new RevisionAvailable(workerId, expiredAt+1, newNode.getExpiredAt());
-		}
-
-		throw new RevisionMatchFailureException(target.toString());
+		throw new RevisionException("No worker available");
 
 	}
 
