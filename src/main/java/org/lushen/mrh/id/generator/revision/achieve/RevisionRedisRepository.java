@@ -27,8 +27,6 @@ import org.springframework.data.redis.connection.RedisStringCommands.SetOption;
 import org.springframework.data.redis.core.types.Expiration;
 import org.springframework.data.redis.serializer.Jackson2JsonRedisSerializer;
 
-import com.google.common.primitives.Ints;
-
 /**
  * revision 持久化接口 redis 实现，使用 redis setNX 全局锁进行并发控制
  * 
@@ -114,8 +112,8 @@ public class RevisionRedisRepository implements RevisionRepository {
 				entity.setLastTimestamp(macthingAt + timeToLive.toMillis());
 				entity.setCreateTime(availableEntity.getCreateTime());
 				entity.setModifyTime(new Date());
-				connection.hSet(name, Ints.toByteArray(entity.getWorkerId()), this.serializer.serialize(entity));
-
+				connection.hSet(name, String.valueOf(entity.getWorkerId()).getBytes(StandardCharsets.UTF_8), this.serializer.serialize(entity));
+				
 				if(log.isInfoEnabled()) {
 					log.info("Update worker " + entity);
 				}
@@ -145,7 +143,7 @@ public class RevisionRedisRepository implements RevisionRepository {
 				entity.setLastTimestamp(macthingAt + timeToLive.toMillis());
 				entity.setCreateTime(new Date());
 				entity.setModifyTime(new Date());
-				connection.hSet(name, Ints.toByteArray(entity.getWorkerId()), this.serializer.serialize(entity));
+				connection.hSet(name, String.valueOf(entity.getWorkerId()).getBytes(StandardCharsets.UTF_8), this.serializer.serialize(entity));
 
 				if(log.isInfoEnabled()) {
 					log.info("Add worker " + entity);
