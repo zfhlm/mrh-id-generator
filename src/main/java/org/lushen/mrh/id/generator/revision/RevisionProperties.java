@@ -37,9 +37,9 @@ public class RevisionProperties {
 
 	protected LocalDate epochDate;						// 系统上线日期
 
-	protected Duration timeToLive;						// 可用时长(初始时长、延时时长)
+	protected Duration timeToLive;						// 生成器每次实例化可用时长
 
-	protected Duration remainingTimeToDelay;			// 剩余多少时长触发延时
+	protected Duration remainingTimeToDelay;			// 剩余多少时长，才实例化备用生成器
 
 	protected RevisionProperties() {
 		super();
