@@ -94,13 +94,9 @@ public class RevisionIdGenerator extends RevisionProperties implements IdGenerat
 		schedule(() -> {
 			synchronized (this.executor) {
 				if(this.back == null && this.curr.getExpiredAt() - System.currentTimeMillis() <= this.remainingTimeToDelay.toMillis()) {
-					try {
-						long epochAt = this.epochDate.atStartOfDay(ZoneOffset.ofHours(8)).toInstant().toEpochMilli();
-						RevisionWorker worker = this.repository.obtain(this.namespace, this.curr.getExpiredAt()+1L, this.timeToLive, this.curr.getWorkerId());
-						this.back = new ActualRevisionIdGenerator(epochAt, worker.getWorkerId(), worker.getBeginAt(), worker.getExpiredAt());
-					} catch (Exception e) {
-						log.error(e.getMessage(), e);
-					}
+					long epochAt = this.epochDate.atStartOfDay(ZoneOffset.ofHours(8)).toInstant().toEpochMilli();
+					RevisionWorker worker = this.repository.obtain(this.namespace, this.curr.getExpiredAt()+1L, this.timeToLive, this.curr.getWorkerId());
+					this.back = new ActualRevisionIdGenerator(epochAt, worker.getWorkerId(), worker.getBeginAt(), worker.getExpiredAt());
 				}
 			}
 		});
@@ -114,7 +110,7 @@ public class RevisionIdGenerator extends RevisionProperties implements IdGenerat
 					Thread.sleep(100L);
 					command.run();
 				}
-			} catch (Exception e) {
+			} catch (Throwable e) {
 				log.warn("Restart scheduler, because of " + e.getMessage());
 				schedule(command);
 			}
