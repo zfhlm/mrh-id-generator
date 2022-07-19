@@ -169,7 +169,7 @@
         // 号段ID生成器
         @Bean
         public IdGenerator segmentIdGenerator(SegmentRepository repository, SegmentProperties properties) {
-            return new DefaultSegmentIdGeneratorFactory(repository).create(properties);
+            return new SegmentIdGeneratorFactory(repository).create(properties);
         }
 
         // 注入号段ID生成器

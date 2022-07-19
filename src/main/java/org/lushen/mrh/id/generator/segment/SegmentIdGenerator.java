@@ -15,7 +15,7 @@ public class SegmentIdGenerator extends SegmentProperties implements IdGenerator
 
 	private final SegmentRepository repository;											// 存储接口
 
-	private long offset;																// 当前号段使用偏移量
+	private volatile long offset;														// 当前号段使用偏移量
 
 	private Segment curr;																// 当前号段
 
